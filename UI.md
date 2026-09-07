@@ -1,32 +1,30 @@
 # Serial Port Application UI
 
-Version: 3.0 (page 3 — UART Connection Status)
+Version: 3.0 — aligned to cleaned Google Slides page 3
 
-## Colors / fonts
-- Window background: `#E8E8E8`
-- Section panels (`LabelFrame`): `#F5F5F5`, groove border, bold title
-- Tree heading: Arial 10 bold, purple
-- Tree rows: Arial 10
+## Colors
+- Window / panels: `#FFFFFF` (white)
+- Section blue: `#D6E8F8`, black 1px outline
+- Buttons: gray `#C0C0C0`
+- **One** outer border: orange `#FF8C00`
 
-## Layout (grid)
-```
-+-------------------------------+------------------+
-| UART Connection Status        | Port Settings    |
-| (tree)                        | Ports / bits /   |
-|                               | Bauds list / Open|
-+-------------------------------+------------------+
-| Devices                       | Connection       |
-| (list preview)                | Select / Close   |
-+-------------------------------+------------------+
-| Scan Controls: In Use | Scan Ports | Scan Devices | Exit |
-+----------------------------------------------------------+
-```
+## 1st — Header
+- Light blue bar, black outline; white gap from orange border
+- Left: **UART Connection Status** (black)
+- Right: In Use / Scan Ports / Scan Devices — checkbox on top of each gray button
 
-## ID/Baud column
-- No device found: Port ID (USB vendor/port ID)
-- Device identified: baud used to connect (e.g. `115.2K`)
+## 2nd — Status list (own blue box)
+- Untitled light-blue box, black outline
+- Column titles in blue area; Status / Port # / ID/Baud fixed width
 
-## Controls
-- Checkbox = continuous auto action
-- Button = one-shot; clears all three checkboxes / stops autos
-- Port auto: 500 ms | Device auto: 2.5 s
+## 3rd — Connection controls (own blue box)
+- Bold UI text
+- **Status**: read-only text box
+- **Port** / **Baud**: editable combobox; no `* Manual Entry *` item
+- **Settings**: white button `None - 1 - 1 - None `
+- **Device**: label + dropdown to the right
+- Top-right: **Open:** (left-aligned); under it **Scan Device**
+
+## 4th — Bottom
+- White bar; **Exit** then **Select** on the right (**Select** furthest right)
+- Button text center-aligned
