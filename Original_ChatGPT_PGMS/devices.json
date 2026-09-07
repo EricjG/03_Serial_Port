@@ -1,0 +1,24 @@
+[
+    {
+        "name": "SIM7080G",
+        "init": "AT\r",
+        "query": "AT+CSQ\r",
+        "response_regex": "\\+CSQ: \\d{1,2},\\d{1,2}",
+        "wait_time": 1,
+        "baudrate": 115200,
+        "parity": "N",
+        "stopbits": 1,
+        "bytesize": 8
+    },
+    {
+        "name": "Another Device",
+        "init": "INIT_CMD\r",
+        "query": "QUERY_CMD\r",
+        "response_regex": "EXPECTED_RESPONSE_PATTERN",
+        "wait_time": 2,
+        "baudrate": 115200,
+        "parity": "E",
+        "stopbits": 1,
+        "bytesize": 8
+    }
+]

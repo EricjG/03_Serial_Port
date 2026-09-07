@@ -1,0 +1,139 @@
+{
+  "devices": [
+    {
+      "vendor_ids": [
+        "1027"
+      ],
+      "manufacturer": "SIMCom",
+      "model": "SIM7080",
+      "serial_parameters": {
+        "baudrate": 115200,
+        "parity": "N",
+        "stopbits": 1,
+        "bytesize": 8
+      },
+      "commands": {
+        "initialize": {
+          "message": "AT\r",
+          "pause": 1
+        },
+        "identify": {
+          "message": "AT+GMM\r",
+          "pause": 2
+        }
+      },
+      "response": {
+        "regex": "SIMCOM_(?P<model>SIM7080)",
+        "device_column": "SIMCom {model}"
+      }
+    },
+    {
+      "vendor_ids": [
+        "4292"
+      ],
+      "manufacturer": "MUX Wiring",
+      "model": "MB607",
+      "serial_parameters": {
+        "baudrate": 460800,
+        "parity": "N",
+        "stopbits": 1,
+        "bytesize": 8
+      },
+      "commands": {
+        "initialize": {
+          "message": "\r\r",
+          "pause": 1
+        },
+        "identify": {
+          "message": "I\r",
+          "pause": 1
+        }
+      },
+      "response": {
+        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
+        "device_column": "Revision {revision}"
+      }
+    },
+    {
+      "vendor_ids": [
+        "4292"
+      ],
+      "manufacturer": "MUX Wiring",
+      "model": "MB607",
+      "serial_parameters": {
+        "baudrate": 115200,
+        "parity": "N",
+        "stopbits": 1,
+        "bytesize": 8
+      },
+      "commands": {
+        "initialize": {
+          "message": "\r\r",
+          "pause": 1
+        },
+        "identify": {
+          "message": "I\r",
+          "pause": 1
+        }
+      },
+      "response": {
+        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
+        "device_column": "Revision {revision}"
+      }
+    },
+    {
+      "vendor_ids": [
+        "1234"
+      ],
+      "manufacturer": "Rohde & Schwarz",
+      "model": "HMP4040",
+      "serial_parameters": {
+        "baudrate": 9600,
+        "parity": "N",
+        "stopbits": 1,
+        "bytesize": 8
+      },
+      "commands": {
+        "initialize": {
+          "message": "",
+          "pause": 1
+        },
+        "identify": {
+          "message": "*idn?\r",
+          "pause": 1
+        }
+      },
+      "response": {
+        "regex": "(?P<manufacturer>Rohde & Schwarz), (?P<model>HMP4040), (?P<serial>\\d+), (?P<firmware>\\d+\\.\\d+)",
+        "device_column": "{manufacturer} {model} (S/N: {serial}, FW: {firmware})"
+      }
+    },
+    {
+      "vendor_ids": [
+        "4592"
+      ],
+      "manufacturer": "ESO",
+      "model": "S-Woom32",
+      "serial_parameters": {
+        "baudrate": 9600,
+        "parity": "N",
+        "stopbits": 1.0,
+        "bytesize": 8
+      },
+      "commands": {
+        "initialize": {
+          "message": "",
+          "pause": 1
+        },
+        "identify": {
+          "message": "",
+          "pause": 1
+        }
+      },
+      "response": {
+        "regex": "",
+        "device_column": ""
+      }
+    }
+  ]
+}
