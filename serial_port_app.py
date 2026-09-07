@@ -5,14 +5,19 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from serial.tools import list_ports     # requires pyserial package: pip install pyserial
 import serial                           # requires pyserial package: pip install pyserial
+from collections import namedtuple
 import json
 import re
 import threading
 import time
 
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 AUTO_PORT_SCAN_MS = 1500  # interval when Auto Port Scan is enabled
 PORT_OPEN_TIMEOUT = 0.15  # seconds; faster availability probe
+
+# device_column: formatted response.device_column template
+# description: manufacturer + model (replaces USB-serial driver text)
+IdentifiedDevice = namedtuple("IdentifiedDevice", ("device_column", "description"))
 
 
 class SerialPortApp:
@@ -146,11 +151,71 @@ class SerialPortApp:
         """True if value is a numeric USB vendor ID string."""
         return str(value).isdigit()
 
+    @staticmethod
+    def _format_device_identity(device, match):
+        """Fill response.device_column from regex groups plus manufacturer/model."""
+        groups = match.groupdict() if match else {}
+        manufacturer = str(device.get("manufacturer") or "").strip()
+        model = str(device.get("model") or "").strip()
+        values = {"manufacturer": manufacturer, "model": model}
+        values.update({k: ("" if v is None else str(v)) for k, v in groups.items()})
+
+        template = (device.get("response") or {}).get("device_column") or ""
+        formatted = ""
+        if template:
+            class _Safe(dict):
+                def __missing__(self, key):
+                    return ""
+
+            try:
+                formatted = template.format_map(_Safe(values)).strip()
+            except (ValueError, IndexError):
+                formatted = template.strip()
+
+        manufacturer_model = " ".join(p for p in (manufacturer, model) if p)
+        device_column = formatted or manufacturer_model or model or manufacturer
+        description = manufacturer_model or formatted or device_column
+        if not device_column:
+            device_column = model or "Unknown"
+            description = description or device_column
+        return IdentifiedDevice(device_column=device_column, description=description)
+
+    @staticmethod
+    def _identified_device_column_text(identified):
+        if identified is None or identified == "Unknown":
+            return ""
+        if isinstance(identified, IdentifiedDevice):
+            return identified.device_column
+        return str(identified)
+
+    @staticmethod
+    def _identified_description_text(identified):
+        if identified is None or identified == "Unknown":
+            return ""
+        if isinstance(identified, IdentifiedDevice):
+            return identified.description or identified.device_column
+        return str(identified)
+
+    @staticmethod
+    def _row_display_columns(device_scan_enabled, vendor_id, identified, port_description):
+        """Tree values for Device / Port ID and Description.
+
+        Identified + Device Scan on: device_column template, manufacturer + model.
+        Otherwise: vendor ID and pyserial USB-serial description.
+        """
+        if device_scan_enabled and identified and identified != "Unknown":
+            device_col = SerialPortApp._identified_device_column_text(identified)
+            desc_col = SerialPortApp._identified_description_text(identified)
+            if device_col:
+                return device_col, desc_col or device_col
+        return vendor_id, port_description
+
     def _display_device_column(self, vendor_id, device_name):
-        """Show device model when Device Scan is on, otherwise vendor/port ID."""
-        if self.device_scan_var.get() and device_name:
-            return device_name
-        return vendor_id
+        """Show formatted device identity when Device Scan is on, else vendor/port ID."""
+        device_col, _ = self._row_display_columns(
+            self.device_scan_var.get(), vendor_id, device_name, ""
+        )
+        return device_col
 
     @staticmethod
     def _vendor_id_in_list(vendor_id, vendor_ids):
@@ -270,7 +335,8 @@ class SerialPortApp:
                 vid = str(p.vid) if p and p.vid else vendor_id
                 print(f"Scanning device on port: {port} with Vendor ID: {vid}")
                 identified = self.identify_device(port, vid)
-                device_name = identified if identified != "Unknown" else device_name
+                if identified:
+                    device_name = identified
                 self.port_data[index] = (
                     status,
                     port,
@@ -288,9 +354,11 @@ class SerialPortApp:
         for status, port, vendor_id, device_name, description in self.port_data:
             if not self.show_in_use_var.get() and status == "In use":
                 continue
-            display = self._display_device_column(vendor_id, device_name)
+            device_col, desc_col = self._row_display_columns(
+                self.device_scan_var.get(), vendor_id, device_name, description
+            )
             self.tree.insert(
-                "", tk.END, values=(status, port, display, description)
+                "", tk.END, values=(status, port, device_col, desc_col)
             )
 
     def sort_treeview(self):
@@ -313,14 +381,16 @@ class SerialPortApp:
         device_name = None
         if status == "Available" and self.device_scan_var.get():
             identified = self.identify_device(port, vendor_id)
-            if identified != "Unknown":
+            if identified:
                 device_name = identified
-        display = self._display_device_column(vendor_id, device_name)
-        print(
-            f"Port {port} status: {status}, Device / Port ID: {display}, "
-            f"Description: {description}"
+        device_col, desc_col = self._row_display_columns(
+            self.device_scan_var.get(), vendor_id, device_name, description
         )
-        self.tree.insert("", tk.END, values=(status, port, display, description))
+        print(
+            f"Port {port} status: {status}, Device / Port ID: {device_col}, "
+            f"Description: {desc_col}"
+        )
+        self.tree.insert("", tk.END, values=(status, port, device_col, desc_col))
 
     def identify_device(self, port, vendor_id):
         return self._identify_device_with_defs(
@@ -427,7 +497,7 @@ class SerialPortApp:
                 identified_device = self._identify_device_with_defs(
                     port, vid, device_definitions
                 )
-                if identified_device != "Unknown":
+                if identified_device:
                     device_name = identified_device
                 port_data[index] = (
                     status,
@@ -486,11 +556,12 @@ class SerialPortApp:
                     match = re.search(device["response"]["regex"], response)
                     if match:
                         print(f"Regex match found: {match.groupdict()}")
+                        identity = self._format_device_identity(device, match)
                         print(
-                            f"Device identified: {device['manufacturer']} "
-                            f"{device['model']} on port {port}"
+                            f"Device identified: {identity.description} "
+                            f"({identity.device_column}) on port {port}"
                         )
-                        return device["model"]
+                        return identity
                     print(
                         f"No regex match for device: {device['manufacturer']} "
                         f"{device['model']} on port {port}"
@@ -502,7 +573,7 @@ class SerialPortApp:
                 )
                 continue
         print(f"No device identified on port {port}")
-        return "Unknown"
+        return None
 
     def toggle_auto_port_scan(self):
         """Handle the 'Auto Port Scan' checkbox toggle."""
@@ -562,7 +633,7 @@ class SerialPortApp:
                 identified_device = self._identify_device_with_defs(
                     port, vid, device_definitions
                 )
-                if identified_device != "Unknown":
+                if identified_device:
                     device_updates[port] = identified_device
             self.root.after(
                 0,
