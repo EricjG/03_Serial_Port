@@ -16,6 +16,8 @@ Version: 3.0 — aligned to cleaned Google Slides page 3
 ## 2nd — Status list (own blue box)
 - Untitled light-blue box, black outline
 - Column titles in blue area; Status / Port # / ID/Baud fixed width
+- **Available / In Use:** ID/Baud = USB vendor ID; Serial Driver / Connected Device = pyserial adapter text
+- **Identified:** ID/Baud = baud used to identify; Serial Driver / Connected Device = formatted `devices.json` `response.device_column` (not USB-serial driver text)
 
 ## 3rd — Connection controls (own blue box)
 - Bold UI text
@@ -23,7 +25,7 @@ Version: 3.0 — aligned to cleaned Google Slides page 3
 - **Port** / **Baud**: editable combobox; no `* Manual Entry *` item
 - **Settings**: white button `None - 1 - 1 - None `
 - **Device**: label + dropdown to the right
-- Top-right: **Open:** (left-aligned); under it **Scan Device**
+- Top-right: **Open:** (left-aligned, not wired); under it **Scan Device** (tree-selected port only)
 
 ## 4th — Bottom
 - White bar; **Exit** then **Select** on the right (**Select** furthest right)

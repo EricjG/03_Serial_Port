@@ -369,9 +369,10 @@ class SerialPortApp:
         self.scan_device_button = tk.Button(
             right,
             text="Scan Device",
+            command=self.on_scan_device_button,
             width=12,
-            state=tk.DISABLED,
             bg=UI_BTN_GRAY,
+            activebackground="#A8A8A8",
             disabledforeground="#000000",
             anchor="w",
             justify="left",
@@ -536,9 +537,66 @@ class SerialPortApp:
         return vendor_id if vendor_id else "Unknown"
 
     def _driver_or_device_column(self, status, device_name, description):
+        """Identified rows show formatted device identity, not USB-serial text."""
         if status == "Identified" and device_name:
             return device_name
         return description or "Unknown"
+
+    @staticmethod
+    def _format_device_identity(device, match):
+        """Fill response.device_column from regex named groups + manufacturer/model."""
+        groups = match.groupdict() if match else {}
+        manufacturer = str(device.get("manufacturer") or "").strip()
+        model = str(device.get("model") or "").strip()
+        values = {"manufacturer": manufacturer, "model": model}
+        values.update({k: ("" if v is None else str(v)) for k, v in groups.items()})
+
+        template = (device.get("response") or {}).get("device_column") or ""
+        formatted = ""
+        if template:
+
+            class _Safe(dict):
+                def __missing__(self, key):
+                    return ""
+
+            try:
+                formatted = template.format_map(_Safe(values)).strip()
+            except (ValueError, IndexError):
+                formatted = template.strip()
+
+        manufacturer_model = " ".join(p for p in (manufacturer, model) if p)
+        return formatted or manufacturer_model or model or manufacturer or "Unknown"
+
+    @staticmethod
+    def _port_from_tree_values(values):
+        if not values or len(values) < 2:
+            return None
+        port = str(values[1]).strip()
+        return port or None
+
+    def _selected_tree_port(self):
+        """Port # from the current tree selection, or None."""
+        try:
+            sel = self.tree.selection()
+        except tk.TclError:
+            return None
+        if not sel:
+            return None
+        return self._port_from_tree_values(self.tree.item(sel[0], "values"))
+
+    def _select_port_in_tree(self, port):
+        for item in self.tree.get_children():
+            if self._port_from_tree_values(self.tree.item(item, "values")) == port:
+                self.tree.selection_set(item)
+                self.tree.see(item)
+                return
+
+    def _sync_settings_from_port(self, port):
+        for status, p, *_rest in self.port_data:
+            if p == port:
+                self.settings_status_var.set(status)
+                self.settings_port_var.set(port)
+                return
 
     @staticmethod
     def _vendor_id_in_list(vendor_id, vendor_ids):
@@ -695,7 +753,7 @@ class SerialPortApp:
         )
 
     def _identify_device_with_defs(self, port, vendor_id, device_definitions):
-        """Return (model_or_None, baud_or_None)."""
+        """Return (device_column_or_None, baud_or_None)."""
         print(f"Identifying device on port: {port} with Vendor ID: {vendor_id}")
         for device in device_definitions["devices"]:
             if not self._vendor_id_in_list(vendor_id, device["vendor_ids"]):
@@ -725,12 +783,13 @@ class SerialPortApp:
 
                     match = re.search(device["response"]["regex"], response)
                     if match:
+                        identity = self._format_device_identity(device, match)
                         print(f"Regex match found: {match.groupdict()}")
                         print(
                             f"Device identified: {device['manufacturer']} "
-                            f"{device['model']} on port {port} @ {baud}"
+                            f"{device['model']} ({identity}) on port {port} @ {baud}"
                         )
-                        return device["model"], baud
+                        return identity, baud
                     print(
                         f"No regex match for device: {device['manufacturer']} "
                         f"{device['model']} on port {port}"
@@ -779,7 +838,7 @@ class SerialPortApp:
             print(f"Device scan failed: {e}")
             self.root.after(0, self._finish_device_scan)
 
-    def _apply_device_scan_result(self, updates):
+    def _apply_device_scan_result(self, updates, selected_port=None):
         if updates:
             new_data = []
             for status, port, vendor_id, device_name, description, baud in self.port_data:
@@ -808,6 +867,9 @@ class SerialPortApp:
                     )
             self.port_data = new_data
         self.update_ports_from_data()
+        if selected_port:
+            self._select_port_in_tree(selected_port)
+            self._sync_settings_from_port(selected_port)
         self._finish_device_scan()
 
     def _finish_device_scan(self):
@@ -954,6 +1016,81 @@ class SerialPortApp:
         print("Scan Devices button clicked")
         self._clear_auto_scans()
         self.retest_available_ports()
+
+    def on_scan_device_button(self):
+        """Identify only the tree-selected port (does not rescan the list)."""
+        print("Scan Device button clicked")
+        port = self._selected_tree_port()
+        if not port:
+            print("Scan Device: select a port in the list first.")
+            self.settings_status_var.set("Select a port")
+            return
+        entry = next((e for e in self.port_data if e[1] == port), None)
+        if entry and entry[0] == "In Use":
+            print(f"Scan Device: port {port} is In Use; not probing.")
+            self.settings_status_var.set("In Use")
+            return
+        self.scan_selected_port(port)
+
+    def scan_selected_port(self, port):
+        """One-shot identify for a single port; reloads devices.json."""
+        if not self._device_scan_lock.acquire(blocking=False):
+            print("Device scan already in progress, skipping.")
+            return
+        self._device_scan_running = True
+        threading.Thread(
+            target=self._scan_one_device_worker, args=(port,), daemon=True
+        ).start()
+
+    def _scan_one_device_worker(self, port):
+        print(f"Scanning selected port for device: {port}")
+        try:
+            with open("devices.json", "r") as f:
+                device_definitions = json.load(f)
+            print("Reloaded device definitions from JSON file.")
+
+            entry = next((e for e in self.port_data if e[1] == port), None)
+            if entry is None:
+                print(f"Scan Device: port {port} is not in the current list.")
+
+                def missing():
+                    self.settings_status_var.set("Port not listed")
+                    self._finish_device_scan()
+
+                self.root.after(0, missing)
+                return
+
+            status, _p, vendor_id, _name, _desc, _baud = entry
+            if status == "In Use":
+                print(f"Skipping port {port} as it is In Use.")
+
+                def in_use():
+                    self.settings_status_var.set("In Use")
+                    self._finish_device_scan()
+
+                self.root.after(0, in_use)
+                return
+
+            _, by_device = self._comports_by_device()
+            p = by_device.get(port)
+            vid = str(p.vid) if p and p.vid else vendor_id
+            identified, found_baud = self._identify_device_with_defs(
+                port, vid, device_definitions
+            )
+            updates = {}
+            if identified:
+                updates[port] = (identified, found_baud)
+            elif status == "Identified":
+                updates[port] = None
+
+            def apply():
+                self.device_definitions = device_definitions
+                self._apply_device_scan_result(updates, selected_port=port)
+
+            self.root.after(0, apply)
+        except Exception as e:
+            print(f"Scan Device failed: {e}")
+            self.root.after(0, self._finish_device_scan)
 
 
 if __name__ == "__main__":
