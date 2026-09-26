@@ -1,6 +1,8 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.defaultInterpreterPath": "C:\\sp\\03_Serial_Port\\.venv\\Scripts\\python.exe",
   "python.terminal.activateEnvironment": true,
+  "python.terminal.shellIntegration.enabled": false,
+  "terminal.integrated.shellIntegration.enabled": false,
   "python.analysis.extraPaths": [],
   "cursorpyright.analysis.extraPaths": []
 }

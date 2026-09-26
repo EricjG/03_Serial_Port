@@ -20,10 +20,17 @@ Version: 3.0 — aligned to cleaned Google Slides page 3
 
 ## 3rd — Connection controls (own blue box)
 - Bold UI text
-- **Status** / **Port** / **Baud** / **Settings**: labels centered above their box
-- **Status**: read-only text box
-- **Port** / **Baud**: editable combobox; no `* Manual Entry *` item
-- **Settings**: white button, default `Even - 8 - 1 - None `; single-click opens Port Settings
+- **Status** / **Port** / **Baud** / **Port Settings**: labels centered above their box
+- **Status**: read-only; follows the selected port's list status
+- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item
+- **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
+- **Port Settings**: white button, default `Even - 8 - 1 - None `; single-click opens the dialog
+- Picking a port sets Status from the list and enables **Open: COMx**, **Scan Device**, and **Select**
+- **Device** dropdown applies that device's baud and port settings
+- **Open:** opens the selected port with the blue-box baud and port settings; status becomes **Open**
+- **Scan Device** probes only the device shown in the Device dropdown, using the blue-box settings
+- **Select** prints `Selected port: COMx`, closes the open port, then quits
+- **Exit** and the window X also close the open port before quitting
 - **Device**: label + dropdown; dropdown right edge lines up with Settings button
 - Top-right: **Open:** (left-aligned); under it **Scan Device**
 
@@ -32,7 +39,7 @@ Version: 3.0 — aligned to cleaned Google Slides page 3
 - Button text center-aligned
 
 ## Port Settings dialog
-- Open by **single-click** on the main **Settings** value
+- Open by **single-click** on the main **Port Settings** value
 - Orange 3px outer border; white gap; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
 - Defaults: Parity Even, Stop Bits 1, Data Bits 8, Flow None
