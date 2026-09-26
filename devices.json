@@ -6,6 +6,8 @@
       ],
       "manufacturer": "SIMCom",
       "model": "SIM7080",
+      "short_description": "",
+      "long_description": "",
       "serial_parameters": {
         "baudrate": 115200,
         "parity": "N",
@@ -33,6 +35,8 @@
       ],
       "manufacturer": "MUX Wiring",
       "model": "MB607",
+      "short_description": "Body Control Module",
+      "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
       "serial_parameters": {
         "baudrate": 460800,
         "parity": "N",
@@ -60,6 +64,8 @@
       ],
       "manufacturer": "MUX Wiring",
       "model": "MB607",
+      "short_description": "Body Control Module",
+      "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
       "serial_parameters": {
         "baudrate": 115200,
         "parity": "N",
@@ -87,6 +93,8 @@
       ],
       "manufacturer": "Rohde & Schwarz",
       "model": "HMP4040",
+      "short_description": "",
+      "long_description": "",
       "serial_parameters": {
         "baudrate": 9600,
         "parity": "N",
@@ -114,6 +122,8 @@
       ],
       "manufacturer": "ESO",
       "model": "S-Woom32",
+      "short_description": "",
+      "long_description": "",
       "serial_parameters": {
         "baudrate": 9600,
         "parity": "N",

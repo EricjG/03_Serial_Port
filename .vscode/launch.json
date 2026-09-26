@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Serial Port App",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/serial_port_app.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}
