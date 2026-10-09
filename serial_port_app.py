@@ -12,10 +12,23 @@ import re
 import threading
 import time
 
+from picker_logic import (
+    DEFAULT_PARITY,
+    apply_header_button_click,
+    device_message_text,
+    dropdown_ports,
+    format_settings_text,
+    format_vid_pid,
+    picker_control_state,
+    port_event_message,
+    unique_device_labels,
+    visible_tree_rows,
+)
+
 APP_VERSION = "3.0"
 AUTO_PORT_SCAN_MS = 1000  # wait before each auto port-scan sequence
 NO_PORTS_LABEL = "No Ports Available"
-AUTO_DEVICE_SCAN_MS = 2500  # identify after port list already updated
+AUTO_DEVICE_SCAN_MS = 1000  # repeat once a second when the header box is checked
 PORT_OPEN_TIMEOUT = 0.15  # seconds; faster availability probe
 
 # Page-3 look (cleaned Serial Port Application UI)
@@ -27,6 +40,9 @@ UI_BTN_GRAY = "#C0C0C0"
 UI_ORANGE = "#FF8C00"
 UI_FG = "#1a1a1a"
 UI_GREEN = "#90EE90"
+UI_DISABLED = "#808080"
+UI_ROW_SELECTED = "#FFFF00"
+UI_CURRENT_SETTINGS = "#FFF2CC"
 
 PARITY_CHOICES = ("None", "Even", "Odd", "Mark", "Space")
 STOP_BITS_CHOICES = ("1", "1.5", "2")
@@ -39,8 +55,13 @@ BAUD_SHORT = [
     (300, "300"),
     (600, "600"),
     (1200, "1.2K"),
+    (2400, "2.4K"),
+    (4800, "4.8K"),
     (9600, "9.6K"),
+    (14400, "14.4K"),
     (19200, "19.2K"),
+    (28800, "28.8K"),
+    (38400, "38.4K"),
     (57600, "57.6K"),
     (115200, "115.2K"),
     (230400, "230.4K"),
@@ -54,8 +75,8 @@ class SerialPortApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Serial Port Application v{APP_VERSION}")
-        self.root.geometry("715x420")
-        self.root.minsize(480, 320)
+        self.root.geometry("720x480")
+        self.root.minsize(700, 440)
         self.root.configure(bg=UI_BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_exit)
 
@@ -77,22 +98,40 @@ class SerialPortApp:
         self._open_serial = None
         self._held_port = None
         self._suppress_device_apply = False
+        self._show_in_use_once = False
+        self._suppress_auto_toggle = False
+        self._device_entries = []
 
         with open("devices.json", "r") as f:
             self.device_definitions = json.load(f)
+        self._rebuild_device_entries()
 
         style = ttk.Style()
-        style.configure("Treeview", font=("Arial", 10, "bold"), rowheight=22)
+        style.configure("Treeview", font=("Arial", 10), rowheight=22)
         style.configure(
             "Treeview.Heading", font=("Arial", 10, "bold"), foreground="#000000"
         )
         style.configure("TCombobox", font=("Arial", 10, "bold"))
+        style.map(
+            "Treeview",
+            background=[("selected", UI_ROW_SELECTED)],
+            foreground=[("selected", "#000000")],
+        )
+        style.map(
+            "TCombobox",
+            foreground=[("disabled", UI_DISABLED)],
+            fieldbackground=[("disabled", "#F0F0F0")],
+        )
 
         self.show_in_use_var = tk.BooleanVar(value=False)
         self.auto_port_scan_var = tk.BooleanVar(value=True)
         self.device_scan_var = tk.BooleanVar(value=False)
 
         self._build_ui()
+        self.root.update_idletasks()
+        req_w = max(700, self.root.winfo_reqwidth())
+        req_h = max(440, self.root.winfo_reqheight())
+        self.root.minsize(req_w, req_h)
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
@@ -160,6 +199,7 @@ class SerialPortApp:
         bottom = tk.Frame(main, bg=UI_BOTTOM, padx=8, pady=6)
         bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
         self._build_bottom_bar(bottom)
+        self._sync_port_selection_ui()
 
     def _build_status_tree(self, parent):
         """Port list in blue box; column titles live in the blue area, aligned to columns."""
@@ -210,12 +250,16 @@ class SerialPortApp:
         scroll.grid(row=1, column=1, sticky="ns")
         self._tree_scrollbar = scroll
 
-        self._tree_body_font = tkfont.Font(family="Arial", size=10, weight="bold")
+        self._tree_body_font = tkfont.Font(family="Arial", size=10)
         self._tree_header_font = tkfont.Font(family="Arial", size=10, weight="bold")
+        self._tree_identified_font = tkfont.Font(family="Arial", size=10, weight="bold")
+        self.tree.tag_configure("identified", font=self._tree_identified_font)
         self._fixed_tree_cols = ("Status", "Port #", "ID/Baud")
 
         self.tree.bind("<Configure>", self._sync_tree_header_widths)
         parent.bind("<Configure>", self._sync_tree_header_widths)
+        self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.root.after(50, self._fit_fixed_tree_columns)
         self.root.after(60, self._sync_tree_header_widths)
 
@@ -357,7 +401,7 @@ class SerialPortApp:
         return col, cb
 
     def _build_port_settings_scaffold(self, parent):
-        """3rd blue box: Status/Port/Baud/Settings; Device; Open Port + Scan Device top-right."""
+        """3rd blue box: Status/Port/Baud/Settings; Device; Open + Identify top-right."""
         wrap = tk.Frame(parent, bg=UI_HEADER)
         wrap.pack(fill=tk.BOTH, expand=True)
 
@@ -365,21 +409,21 @@ class SerialPortApp:
         self.settings_port_var = tk.StringVar(value=NO_PORTS_LABEL)
         self.settings_baud_var = tk.StringVar(value="115.2K")
         self.settings_device_var = tk.StringVar(value="")
-        self.settings_parity_var = tk.StringVar(value="Even")
+        self.settings_parity_var = tk.StringVar(value=DEFAULT_PARITY)
         self.settings_data_var = tk.StringVar(value="8")
         self.settings_stop_var = tk.StringVar(value="1")
         self.settings_flow_var = tk.StringVar(value="None")
 
-        # Right: Open Port / Scan Device stacked
+        # Right: Open / Identify stacked
         right = tk.Frame(wrap, bg=UI_HEADER)
         right.pack(side=tk.RIGHT, anchor="n", padx=(8, 0))
         self.open_port_button = tk.Button(
             right,
             text="Open:",
-            width=12,
+            width=16,
             state=tk.DISABLED,
             bg=UI_BTN_GRAY,
-            disabledforeground="#000000",
+            disabledforeground=UI_DISABLED,
             anchor="w",
             justify="left",
             relief=tk.RAISED,
@@ -387,20 +431,21 @@ class SerialPortApp:
         )
         self.open_port_button.configure(command=self._on_open_port)
         self.open_port_button.pack(anchor="e", pady=(14, 2))
-        self.scan_device_button = tk.Button(
+        self.identify_button = tk.Button(
             right,
-            text="Scan Device",
-            width=12,
+            text="Identify",
+            width=16,
             state=tk.DISABLED,
             bg=UI_BTN_GRAY,
-            disabledforeground="#000000",
+            disabledforeground=UI_DISABLED,
             anchor="w",
             justify="left",
             relief=tk.RAISED,
             font=("Arial", 9, "bold"),
             command=self._on_connection_scan_device,
         )
-        self.scan_device_button.pack(anchor="e")
+        self.identify_button.pack(anchor="e")
+        self.scan_device_button = self.identify_button
 
         left = tk.Frame(wrap, bg=UI_HEADER)
         left.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -457,7 +502,7 @@ class SerialPortApp:
 
         # Baud: dropdown + manual entry; no '* Manual Entry *' item
         baud_labels = [s for _, s in BAUD_SHORT]
-        self._labeled_combo(
+        _, self.settings_baud_combo = self._labeled_combo(
             row1,
             "Baud",
             self.settings_baud_var,
@@ -484,6 +529,7 @@ class SerialPortApp:
             bg="#FFFFFF",
             activebackground="#FFFFFF",
             fg="#000000",
+            disabledforeground=UI_DISABLED,
             anchor="w",
             justify="left",
             relief=tk.RAISED,
@@ -501,11 +547,7 @@ class SerialPortApp:
         tk.Label(
             row2, text="Device", bg=UI_HEADER, fg=UI_FG, font=("Arial", 10, "bold")
         ).pack(side=tk.LEFT, padx=(6, 4))
-        device_names = [
-            label
-            for d in self.device_definitions.get("devices", [])
-            if (label := self._connected_device_label(d))
-        ]
+        device_names = [label for label, _device in self._device_entries]
         if not device_names:
             device_names = ["(no devices)"]
         self.settings_device_var.set(device_names[0])
@@ -527,16 +569,42 @@ class SerialPortApp:
         self._schedule_device_combo_align()
 
     @staticmethod
-    def _format_settings_text(parity, data, stop, flow):
-        return f"{parity} - {data} - {stop} - {flow} "
+    def _format_settings_text(data, stop, parity, flow):
+        return format_settings_text(data, stop, parity, flow)
 
     def _format_settings_summary(self):
         return self._format_settings_text(
-            self.settings_parity_var.get(),
             self.settings_data_var.get(),
             self.settings_stop_var.get(),
+            self.settings_parity_var.get(),
             self.settings_flow_var.get(),
         )
+
+    def _rebuild_device_entries(self):
+        devices = self.device_definitions.get("devices", [])
+        bases = [self._connected_device_label(item) or "device" for item in devices]
+        self._device_entries = list(zip(unique_device_labels(bases), devices))
+
+    def _device_for_unique_label(self, label):
+        return next(
+            (item for unique, item in self._device_entries if unique == label),
+            None,
+        )
+
+    def _unique_label_for_device(self, device, found_label=None, baud=None):
+        if device is not None:
+            for unique, item in self._device_entries:
+                if item is device:
+                    return unique
+        if found_label:
+            for unique, item in self._device_entries:
+                if self._connected_device_label(item) != found_label:
+                    continue
+                item_baud = (item.get("serial_parameters") or {}).get("baudrate")
+                if baud is None or item_baud == baud:
+                    return unique
+            return found_label
+        return ""
 
     def _refresh_settings_summary(self):
         self.settings_summary.configure(text=self._format_settings_summary())
@@ -554,22 +622,93 @@ class SerialPortApp:
                 return entry
         return None
 
+    def _include_in_use_ports(self):
+        return bool(self.show_in_use_var.get() or self._show_in_use_once)
+
+    def _set_combo_enabled(self, combo, enabled, editable=False):
+        if combo is None:
+            return
+        if not enabled:
+            combo.configure(state="disabled")
+        else:
+            combo.configure(state="normal" if editable else "readonly")
+
+    def _set_button_enabled(self, button, enabled, **kwargs):
+        if button is None:
+            return
+        button.configure(state=tk.NORMAL if enabled else tk.DISABLED, **kwargs)
+
+    def _highlight_tree_port(self, port):
+        tree = getattr(self, "tree", None)
+        if tree is None or not port:
+            return
+        try:
+            if tree.exists(port):
+                current = tree.selection()
+                if current != (port,):
+                    tree.selection_set(port)
+                tree.see(port)
+        except tk.TclError:
+            pass
+
+    def _on_tree_select(self, _event=None):
+        tree = getattr(self, "tree", None)
+        if tree is None:
+            return
+        selection = tree.selection()
+        if not selection:
+            return
+        port = selection[0]
+        if self.settings_port_var.get() != port:
+            self.settings_port_var.set(port)
+
+    def _on_tree_double_click(self, _event=None):
+        select_btn = getattr(self, "select_button", None)
+        if select_btn is None:
+            return
+        if str(select_btn.cget("state")) == str(tk.DISABLED):
+            return
+        self._on_select_port()
+
+    def _set_message_lines(self, port_text=None, device_text=None):
+        if port_text is not None and getattr(self, "port_message_var", None) is not None:
+            self.port_message_var.set(port_text)
+        if device_text is not None and getattr(self, "device_message_var", None) is not None:
+            self.device_message_var.set(device_text)
+
     def _sync_port_selection_ui(self):
         port = self._selected_port()
-        select_btn = getattr(self, "select_button", None)
-        if not port:
-            self.settings_status_var.set("None Available")
-            self.open_port_button.configure(text="Open:", state=tk.DISABLED)
-            self.scan_device_button.configure(state=tk.DISABLED)
-            if select_btn is not None:
-                select_btn.configure(state=tk.DISABLED)
-            return
-        row = self._port_row(port)
-        self.settings_status_var.set(row[0] if row else "Unknown")
-        self.open_port_button.configure(text=f"Open: {port}", state=tk.NORMAL)
-        self.scan_device_button.configure(state=tk.NORMAL)
-        if select_btn is not None:
-            select_btn.configure(state=tk.NORMAL)
+        row = self._port_row(port) if port else None
+        visible = dropdown_ports(
+            [(entry[0], entry[1]) for entry in self.port_data],
+            self._include_in_use_ports(),
+            extra=(port, self._held_port),
+        )
+        state = picker_control_state(
+            has_ports=bool(visible or port),
+            selected_port=port,
+            port_status=row[0] if row else None,
+            held=bool(port and self._held_port == port),
+        )
+        self.settings_status_var.set(state["status"])
+        self._set_combo_enabled(
+            getattr(self, "settings_port_combo", None), state["port"], editable=True
+        )
+        self._set_combo_enabled(
+            getattr(self, "settings_baud_combo", None), state["baud"], editable=True
+        )
+        self._set_button_enabled(getattr(self, "settings_summary", None), state["settings"])
+        self._set_button_enabled(
+            getattr(self, "open_port_button", None),
+            state["open"],
+            text=state["open_label"],
+        )
+        self._set_combo_enabled(
+            getattr(self, "settings_device_combo", None), state["device"]
+        )
+        self._set_button_enabled(getattr(self, "identify_button", None), state["identify"])
+        self._set_button_enabled(getattr(self, "select_button", None), state["select"])
+        self._highlight_tree_port(port)
 
     def _parse_baud(self, text):
         raw = (text or "").strip().upper().replace(" ", "")
@@ -599,6 +738,9 @@ class SerialPortApp:
         }
 
     def _device_for_label(self, label):
+        device = self._device_for_unique_label(label)
+        if device is not None:
+            return device
         return next(
             (
                 item
@@ -614,6 +756,9 @@ class SerialPortApp:
         device = self._device_for_label(self.settings_device_var.get())
         if not device:
             return
+        if self._held_port:
+            self._set_message_lines(device_text=device_message_text(device))
+            return
         params = device.get("serial_parameters") or {}
         baud = params.get("baudrate")
         if baud is not None:
@@ -628,6 +773,7 @@ class SerialPortApp:
         self.settings_stop_var.set(stop_text)
         self.settings_flow_var.set("None")
         self._refresh_settings_summary()
+        self._set_message_lines(device_text=device_message_text(device))
 
     def _release_serial(self):
         ser = self._open_serial
@@ -670,29 +816,41 @@ class SerialPortApp:
         except (serial.SerialException, OSError, ValueError) as exc:
             self._held_port = None
             self._log(f"Open {port} failed: {exc}")
-            self.settings_status_var.set("Error")
             return False
 
     def _on_open_port(self):
         port = self._selected_port()
         if not port:
             return
+        if self._held_port == port:
+            self._release_serial()
+            self._held_port = None
+            self._log(f"Closed {port}")
+            row = self._port_row(port)
+            status = "Identified" if row and row[3] else "Available"
+            self._set_port_row(port, status=status, keep_device=True)
+            self._set_message_lines(port_text=port_event_message(port, "Closed"))
+            return
         self._release_serial()
         self._held_port = None
         if not self._reopen_held(port):
+            self._set_message_lines(port_text=f"Port: {port} open failed")
             return
         settings = self._serial_settings_from_ui()
         self._log(
             f"Opened {port} @ {settings['baudrate']} "
-            f"{self.settings_parity_var.get()}-{self.settings_data_var.get()}-"
-            f"{self.settings_stop_var.get()}-{self.settings_flow_var.get()}"
+            f"{self._format_settings_summary()}"
         )
         self._set_port_row(port, status="Open", keep_device=True)
+        self._set_message_lines(port_text=port_event_message(port, "Open"))
 
     def _apply_connection_scan(self, port, found, settings, was_open):
         if found:
+            unique = self._unique_label_for_device(
+                None, found_label=found, baud=settings.get("baudrate")
+            )
             self._suppress_device_apply = True
-            self.settings_device_var.set(found)
+            self.settings_device_var.set(unique)
             self._suppress_device_apply = False
             self._set_port_row(
                 port,
@@ -700,6 +858,13 @@ class SerialPortApp:
                 device_name=found,
                 baud=settings.get("baudrate"),
             )
+            device = self._device_for_label(unique) or self._device_for_label(found)
+            self._set_message_lines(
+                port_text=port_event_message(port, "Identified"),
+                device_text=device_message_text(device),
+            )
+        else:
+            self._set_message_lines(device_text="Device: not found")
         self._finish_device_scan()
         if was_open and self._reopen_held(port) and not found:
             self._set_port_row(port, status="Open", keep_device=True)
@@ -719,12 +884,12 @@ class SerialPortApp:
             return
         device = self._device_for_label(self.settings_device_var.get())
         if device is None:
-            self._log("Select a device before Scan Device.")
+            self._log("Select a device before Identify.")
             return
         try:
             settings = self._serial_settings_from_ui()
         except (ValueError, KeyError) as exc:
-            self._log(f"Scan Device settings invalid: {exc}")
+            self._log(f"Identify settings invalid: {exc}")
             return
         if not self._device_scan_lock.acquire(blocking=False):
             self._log("Device scan already in progress, skipping.")
@@ -818,7 +983,7 @@ class SerialPortApp:
         flow_var = tk.StringVar(value=self.settings_flow_var.get())
         preview_var = tk.StringVar(
             value=self._format_settings_text(
-                parity_var.get(), data_var.get(), stop_var.get(), flow_var.get()
+                data_var.get(), stop_var.get(), parity_var.get(), flow_var.get()
             )
         )
         applied_var = tk.StringVar(value=self._format_settings_summary())
@@ -826,7 +991,7 @@ class SerialPortApp:
         def sync_preview(*_args):
             preview_var.set(
                 self._format_settings_text(
-                    parity_var.get(), data_var.get(), stop_var.get(), flow_var.get()
+                    data_var.get(), stop_var.get(), parity_var.get(), flow_var.get()
                 )
             )
 
@@ -899,13 +1064,13 @@ class SerialPortApp:
             ).pack(side=tk.LEFT, padx=(4, 0))
             return cell
 
-        labeled_combo(white, "Parity:", parity_var, PARITY_CHOICES).grid(
+        labeled_combo(white, "Data Bits:", data_var, DATA_BITS_CHOICES).grid(
             row=0, column=0, sticky="w", pady=2
         )
         labeled_combo(
             white, "Stop Bits:", stop_var, STOP_BITS_CHOICES, right=True
         ).grid(row=0, column=1, sticky="e", pady=2)
-        labeled_combo(white, "Data Bits:", data_var, DATA_BITS_CHOICES).grid(
+        labeled_combo(white, "Parity:", parity_var, PARITY_CHOICES).grid(
             row=1, column=0, sticky="w", pady=2
         )
         labeled_combo(white, "Flow:", flow_var, FLOW_CHOICES, right=True).grid(
@@ -960,9 +1125,12 @@ class SerialPortApp:
             relief=tk.SUNKEN,
             bd=2,
             state="readonly",
-            readonlybackground="#FFFFFF",
+            readonlybackground=UI_CURRENT_SETTINGS,
             fg="#000000",
         ).pack(side=tk.LEFT, padx=(0, 8))
+
+        win.bind("<Return>", lambda _e: on_select())
+        win.bind("<Escape>", lambda _e: close_dialog())
 
         win.update_idletasks()
         px = self.root.winfo_rootx() + max(
@@ -976,8 +1144,7 @@ class SerialPortApp:
         win.focus_force()
 
     def _build_bottom_bar(self, parent):
-        """White bar: Exit then Select on the right (Select furthest right); text centered."""
-        # pack RIGHT first = furthest right
+        """White bar: message lines left; Exit then Select on the right."""
         self.select_button = tk.Button(
             parent,
             text="Select",
@@ -985,7 +1152,7 @@ class SerialPortApp:
             state=tk.DISABLED,
             command=self._on_select_port,
             bg=UI_BTN_GRAY,
-            disabledforeground="#000000",
+            disabledforeground=UI_DISABLED,
             anchor="center",
             justify="center",
             relief=tk.RAISED,
@@ -1006,6 +1173,29 @@ class SerialPortApp:
             font=("Arial", 9, "bold"),
         )
         self.exit_button.pack(side=tk.RIGHT, padx=4)
+
+        messages = tk.Frame(parent, bg=UI_BOTTOM)
+        messages.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 8))
+        self.port_message_var = tk.StringVar(value="")
+        self.device_message_var = tk.StringVar(value="")
+        tk.Label(
+            messages,
+            textvariable=self.port_message_var,
+            bg=UI_BOTTOM,
+            fg=UI_FG,
+            font=("Arial", 10, "bold"),
+            anchor="w",
+            justify="left",
+        ).pack(fill=tk.X)
+        tk.Label(
+            messages,
+            textvariable=self.device_message_var,
+            bg=UI_BOTTOM,
+            fg=UI_FG,
+            font=("Arial", 10, "bold"),
+            anchor="w",
+            justify="left",
+        ).pack(fill=tk.X)
 
     def _on_exit(self):
         self._clear_auto_scans()
@@ -1068,31 +1258,56 @@ class SerialPortApp:
 
     def _clear_auto_scans(self):
         """Exit/shutdown: uncheck all and cancel scheduled loops."""
-        self.show_in_use_var.set(False)
-        self.auto_port_scan_var.set(False)
-        self.device_scan_var.set(False)
+        self._stop_all_auto_repeat()
+
+    def _stop_all_auto_repeat(self):
+        in_use, scan_ports, scan_devices = apply_header_button_click(
+            self.show_in_use_var.get(),
+            self.auto_port_scan_var.get(),
+            self.device_scan_var.get(),
+        )
+        self._suppress_auto_toggle = True
+        try:
+            self.show_in_use_var.set(in_use)
+            self.auto_port_scan_var.set(scan_ports)
+            self.device_scan_var.set(scan_devices)
+        finally:
+            self._suppress_auto_toggle = False
         self._cancel_auto_port_scan()
         self._cancel_auto_device_scan()
+        self._device_scan_after_port = False
 
     def _refresh_settings_port_list(self):
-        ports = []
-        for entry in self.port_data:
-            if entry[1] not in ports:
-                ports.append(entry[1])
         current = (self.settings_port_var.get() or "").strip()
+        if current in ("", "* All *", NO_PORTS_LABEL):
+            current = None
+        ports = dropdown_ports(
+            [(entry[0], entry[1]) for entry in self.port_data],
+            self._include_in_use_ports(),
+            extra=(current, self._held_port),
+        )
         if not ports:
             self.settings_port_combo["values"] = [NO_PORTS_LABEL]
-            if current != NO_PORTS_LABEL:
+            if self.settings_port_var.get() != NO_PORTS_LABEL:
                 self.settings_port_var.set(NO_PORTS_LABEL)
             else:
                 self._sync_port_selection_ui()
+            if not self.port_data:
+                self._set_message_lines(
+                    port_text=port_event_message(None, "Closed"),
+                    device_text="Device:",
+                )
             return
         self.settings_port_combo["values"] = ports
         if current in ports:
             self._sync_port_selection_ui()
             return
         available = next(
-            (entry[1] for entry in self.port_data if entry[0] == "Available"),
+            (
+                entry[1]
+                for entry in self.port_data
+                if entry[0] in ("Available", "Identified", "Open") and entry[1] in ports
+            ),
             None,
         )
         self.settings_port_var.set(available or ports[0])
@@ -1185,11 +1400,11 @@ class SerialPortApp:
                     if not self.is_port_available(port_info.device)
                     else "Available"
                 )
-                vendor_id = str(port_info.vid) if port_info.vid else "Unknown"
+                vendor_id = format_vid_pid(port_info.vid, port_info.pid)
                 description = port_info.description or "Unknown"
                 self._log(
                     f"Adding new port: {port_info.device}, Status: {status}, "
-                    f"Vendor ID: {vendor_id}, Description: {description}"
+                    f"ID: {vendor_id}, Description: {description}"
                 )
                 port_data.append(
                     (status, port_info.device, vendor_id, None, description, None)
@@ -1232,19 +1447,24 @@ class SerialPortApp:
             return False
 
     def update_ports_from_data(self):
+        selected = self._selected_port()
+        extra = (selected, self._held_port)
         self.tree.delete(*self.tree.get_children())
-        status_rank = {"Open": 0, "Identified": 1, "Available": 2, "In Use": 3}
-        rows = list(self.port_data)
-        rows.sort(key=lambda x: (status_rank.get(x[0], 9), x[1]))
+        rows = visible_tree_rows(self.port_data, self._include_in_use_ports(), extra=extra)
         for status, port, vendor_id, device_name, description, baud in rows:
-            if not self.show_in_use_var.get() and status == "In Use":
-                continue
             id_baud = self._id_baud_column(status, vendor_id, baud)
             connected = self._driver_or_device_column(status, device_name, description)
+            tags = ("identified",) if status == "Identified" else ()
             self.tree.insert(
-                "", tk.END, values=(status, port, id_baud, connected)
+                "",
+                tk.END,
+                iid=port,
+                values=(status, port, id_baud, connected),
+                tags=tags,
             )
         self._fit_fixed_tree_columns()
+        if selected and self.tree.exists(selected):
+            self._highlight_tree_port(selected)
 
     # ---------------------------------------------------- device identify
     def identify_device(self, port, vendor_id):
@@ -1386,14 +1606,26 @@ class SerialPortApp:
             comports, by_device = self._comports_by_device()
             known_ports = set(by_device)
             port_data = []
+            held = self._held_port
+            held_entry = next(
+                (entry for entry in self.port_data if entry[1] == held),
+                None,
+            )
 
             for port_info in comports:
+                if held and port_info.device == held and held_entry is not None:
+                    port_data.append(held_entry)
+                    self._log_cont(
+                        f"  {port_info.device}  skipped (held open by this app)"
+                    )
+                    continue
                 status = (
                     "In Use"
                     if not self.is_port_available(port_info.device)
                     else "Available"
                 )
-                vendor_id = str(port_info.vid) if port_info.vid else "Unknown"
+                vendor_id = format_vid_pid(port_info.vid, port_info.pid)
+                match_vid = str(port_info.vid) if port_info.vid else vendor_id
                 description = port_info.description or "Unknown"
                 device_name = None
                 baud = None
@@ -1403,19 +1635,19 @@ class SerialPortApp:
                     )
                 else:
                     identified, found_baud = self._identify_device_with_defs(
-                        port_info.device, vendor_id, device_definitions
+                        port_info.device, match_vid, device_definitions
                     )
                     if identified:
                         status = "Identified"
                         device_name = identified
                         baud = found_baud
                         self._log_cont(
-                            f"  {port_info.device}  VID {vendor_id}  FOUND  "
+                            f"  {port_info.device}  ID {vendor_id}  FOUND  "
                             f"{identified} @ {found_baud}"
                         )
                     else:
                         self._log_cont(
-                            f"  {port_info.device}  VID {vendor_id}  NOT FOUND"
+                            f"  {port_info.device}  ID {vendor_id}  NOT FOUND"
                         )
                 port_data.append(
                     (
@@ -1441,6 +1673,10 @@ class SerialPortApp:
 
     def _apply_retest_result(self, device_definitions, known_ports, port_data):
         self.device_definitions = device_definitions
+        self._rebuild_device_entries()
+        names = [label for label, _device in self._device_entries] or ["(no devices)"]
+        if getattr(self, "settings_device_combo", None) is not None:
+            self.settings_device_combo["values"] = names
         self.known_ports = known_ports
         self.port_data = port_data
         self.update_ports_from_data()
@@ -1454,17 +1690,29 @@ class SerialPortApp:
 
     # ------------------------------------------------------ control handlers
     def toggle_ports_in_use(self):
+        if self._suppress_auto_toggle:
+            return
         self._log(f"'In Use' checkbox toggled: {self.show_in_use_var.get()}")
+        self._show_in_use_once = False
         self.update_ports_from_data()
+        self._refresh_settings_port_list()
+        if self.show_in_use_var.get() or self.auto_port_scan_var.get():
+            self.start_auto_port_scan()
+        elif not self.auto_port_scan_var.get():
+            self._cancel_auto_port_scan()
 
     def toggle_auto_port_scan(self):
+        if self._suppress_auto_toggle:
+            return
         self._log(f"'Scan Ports' checkbox toggled: {self.auto_port_scan_var.get()}")
-        if self.auto_port_scan_var.get():
+        if self.auto_port_scan_var.get() or self.show_in_use_var.get():
             self.start_auto_port_scan()
         else:
             self._cancel_auto_port_scan()
 
     def toggle_device_scan(self):
+        if self._suppress_auto_toggle:
+            return
         self._log(f"'Scan Devices' checkbox toggled: {self.device_scan_var.get()}")
         if self.device_scan_var.get():
             self.start_device_scan()
@@ -1474,7 +1722,7 @@ class SerialPortApp:
             # Leave Identified rows as-is; just stop auto
 
     def start_auto_port_scan(self):
-        if not self.auto_port_scan_var.get():
+        if not (self.auto_port_scan_var.get() or self.show_in_use_var.get()):
             self._auto_port_after_id = None
             return
         if self._device_scan_running:
@@ -1504,21 +1752,23 @@ class SerialPortApp:
         )
 
     def on_in_use_button(self):
-        """One-shot: uncheck In Use only; refresh list."""
+        """One-shot: show In Use ports, then stop all auto-repeat."""
         self._log("In Use button clicked")
-        self.show_in_use_var.set(False)
+        self._stop_all_auto_repeat()
+        self._show_in_use_once = True
         self.update_ports_from_data()
+        self._refresh_settings_port_list()
+        self.scan_ports(full=True)
 
     def on_scan_ports_button(self):
         self._log("Scan Ports button clicked")
-        self.auto_port_scan_var.set(False)
-        self._cancel_auto_port_scan()
+        self._stop_all_auto_repeat()
+        self._show_in_use_once = False
         self.scan_ports(full=True)
 
     def on_scan_devices_button(self):
         self._log("Scan Devices button clicked")
-        self.device_scan_var.set(False)
-        self._cancel_auto_device_scan()
+        self._stop_all_auto_repeat()
         self.retest_available_ports()
 
 
