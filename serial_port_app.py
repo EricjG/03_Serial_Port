@@ -15,6 +15,7 @@ import time
 from picker_logic import (
     DEFAULT_PARITY,
     apply_header_button_click,
+    check_button_char_width,
     device_message_text,
     dropdown_ports,
     format_settings_text,
@@ -303,20 +304,33 @@ class SerialPortApp:
             pass
 
     def _build_check_button(self, parent, label, var, on_toggle, on_button, bg=None):
-        """Checkbox on top-left; label right-aligned with room so text isn't covered."""
+        """Checkbox on the button's left edge; label fully to the right of it."""
         cell_bg = bg if bg is not None else UI_PANEL
         cell = tk.Frame(parent, bg=cell_bg)
         cell.pack(side=tk.LEFT, padx=4)
         btn_font = tkfont.Font(family="Arial", size=8, weight="bold")
         avg_char = max(btn_font.measure("0"), 1)
-        # Left gutter for checkbox + gap; text sits on the right
-        cb_clear_px = 0
-        extra_spaces = 1 if len(label) > 8 else 1
-        gap_px = btn_font.measure(" " * extra_spaces)
-        width_chars = max(
-            4,
-            (btn_font.measure(label) + cb_clear_px + gap_px + avg_char - 1) // avg_char
-            + 1,
+        gap_px = btn_font.measure(" ")
+        cb = tk.Checkbutton(
+            cell,
+            variable=var,
+            command=on_toggle,
+            bg=UI_BTN_GRAY,
+            activebackground=UI_BTN_GRAY,
+            selectcolor=UI_BOTTOM,
+            highlightthickness=0,
+            bd=0,
+        )
+        try:
+            cb.update_idletasks()
+            checkbox_px = max(int(cb.winfo_reqwidth()), 1)
+        except tk.TclError:
+            checkbox_px = 16
+        width_chars = check_button_char_width(
+            btn_font.measure(label),
+            checkbox_px,
+            gap_px,
+            avg_char,
         )
         btn = tk.Button(
             cell,
@@ -333,17 +347,12 @@ class SerialPortApp:
             pady=1,
         )
         btn.pack()
-        cb = tk.Checkbutton(
-            cell,
-            variable=var,
-            command=on_toggle,
-            bg=UI_BTN_GRAY,
-            activebackground=UI_BTN_GRAY,
-            selectcolor=UI_BOTTOM,
-            highlightthickness=0,
-            bd=0,
-        )
-        cb.place(in_=btn, x=1, y=0, anchor="nw")
+        try:
+            btn.update_idletasks()
+            y = max(0, (int(btn.winfo_reqheight()) - int(cb.winfo_reqheight())) // 2)
+        except tk.TclError:
+            y = 0
+        cb.place(in_=btn, x=1, y=y, anchor="nw")
 
     def _build_status_header(self, parent):
         """Light-blue bar: title left (black); checkbox-on-button controls right-aligned."""

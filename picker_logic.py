@@ -118,6 +118,23 @@ def apply_header_button_click(in_use, scan_ports, scan_devices):
     return False, False, False
 
 
+CHECK_BUTTON_PAD_PX = 4  # extra pixels past the measured checkbox
+
+
+def check_button_char_width(
+    text_px, checkbox_px, gap_px, avg_char, extra_pad_px=CHECK_BUTTON_PAD_PX
+):
+    """Tk Button width= chars so label sits fully right of checkbox + gap."""
+    avg = max(int(avg_char) or 1, 1)
+    need = (
+        max(0, int(checkbox_px))
+        + max(0, int(gap_px))
+        + max(0, int(text_px))
+        + max(0, int(extra_pad_px))
+    )
+    return max(4, (need + avg - 1) // avg)
+
+
 def dropdown_ports(rows, include_in_use, extra=()):
     """Available / Open / Identified always; In Use only if include_in_use or extra."""
     extra = {port for port in extra if port}

@@ -15,7 +15,7 @@ Version: 3.0 — picker behavior from slides 2-3 and the shared theme (Decided i
 ## 1st — Header
 - Light blue bar, black outline; white gap from orange border
 - Left: **UART Connection Status** (black)
-- Right: In Use / Scan Ports / Scan Devices — checkbox on top of each gray button
+- Right: In Use / Scan Ports / Scan Devices — checkbox on the left edge of each gray button; the button is sized from the real checkbox width plus the label so the text is never covered (Windows and Linux)
 - A checked box means auto-repeat that action once a second
 - Clicking a header button runs that action once and clears **all three** auto-repeat checkboxes
 - **Scan Devices** (header) is unchanged; the bottom-panel button is **Identify**

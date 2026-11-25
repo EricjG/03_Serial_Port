@@ -5,6 +5,7 @@ import unittest
 from picker_logic import (
     DEFAULT_PARITY,
     apply_header_button_click,
+    check_button_char_width,
     device_message_text,
     dropdown_ports,
     format_settings_text,
@@ -236,6 +237,25 @@ class AutoRepeatAndPortListTests(unittest.TestCase):
         self.assertEqual([row[1] for row in visible], ["COM4", "COM2", "COM10"])
         visible_all = visible_tree_rows(rows, include_in_use=True)
         self.assertEqual([row[1] for row in visible_all], ["COM4", "COM2", "COM10", "COM5"])
+
+
+class CheckButtonWidthTests(unittest.TestCase):
+    def test_linux_checkbox_needs_more_chars_than_windows(self):
+        text_px, gap_px, avg = 70, 4, 7
+        linux = check_button_char_width(text_px, 26, gap_px, avg, extra_pad_px=4)
+        windows = check_button_char_width(text_px, 13, gap_px, avg, extra_pad_px=4)
+        self.assertGreater(linux, windows)
+        self.assertEqual(linux, 15)  # 26 + 4 + 70 + 4 = 104; ceil(104/7) = 15
+        self.assertEqual(windows, 13)  # 13 + 4 + 70 + 4 = 91; ceil(91/7) = 13
+
+    def test_width_covers_checkbox_gap_and_label(self):
+        avg = 7
+        chars = check_button_char_width(80, 26, 4, avg, extra_pad_px=4)
+        self.assertGreaterEqual(chars * avg, 26 + 4 + 80)
+
+    def test_zero_checkbox_still_fits_the_label(self):
+        self.assertEqual(check_button_char_width(21, 0, 0, 7, extra_pad_px=0), 4)
+        self.assertEqual(check_button_char_width(7, 0, 0, 7, extra_pad_px=0), 4)
 
 
 if __name__ == "__main__":
