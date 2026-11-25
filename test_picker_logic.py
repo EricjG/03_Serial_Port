@@ -4,12 +4,15 @@ import unittest
 
 from picker_logic import (
     DEFAULT_PARITY,
+    UNKNOWN_DEVICE_MESSAGE,
     apply_header_button_click,
     check_button_char_width,
+    device_identity_key,
     device_message_text,
     dropdown_ports,
     format_settings_text,
     format_vid_pid,
+    identified_device_message,
     natural_port_sort_key,
     open_button_text,
     picker_control_state,
@@ -133,6 +136,52 @@ class StatusAndMessageTests(unittest.TestCase):
             "Device: SIMCom SIM7080",
         )
         self.assertEqual(device_message_text(None), "Device:")
+
+
+class IdentifiedDeviceDisplayTests(unittest.TestCase):
+    mb607 = {
+        "manufacturer": "MUX Wiring",
+        "model": "MB607",
+        "short_description": "Body Control Module",
+    }
+    sim = {"manufacturer": "SIMCom", "model": "SIM7080"}
+
+    def test_unknown_until_identify_confirms_the_dropdown_device(self):
+        self.assertEqual(
+            identified_device_message(None, self.mb607),
+            UNKNOWN_DEVICE_MESSAGE,
+        )
+        self.assertEqual(
+            identified_device_message(None, None),
+            UNKNOWN_DEVICE_MESSAGE,
+        )
+        self.assertEqual(
+            identified_device_message(self.mb607, self.mb607),
+            "Device: MUX Wiring MB607 Body Control Module",
+        )
+
+    def test_other_dropdown_or_other_port_resets_until_that_result_matches(self):
+        self.assertEqual(
+            identified_device_message(self.mb607, self.sim),
+            UNKNOWN_DEVICE_MESSAGE,
+        )
+        self.assertEqual(
+            identified_device_message(self.sim, self.mb607),
+            UNKNOWN_DEVICE_MESSAGE,
+        )
+        self.assertEqual(
+            identified_device_message(self.sim, self.sim),
+            "Device: SIMCom SIM7080",
+        )
+
+    def test_identity_key_is_manufacturer_and_model(self):
+        self.assertEqual(device_identity_key(self.mb607), ("MUX Wiring", "MB607"))
+        self.assertEqual(
+            device_identity_key({"manufacturer": "MUX Wiring", "model": "MB607"}),
+            device_identity_key(self.mb607),
+        )
+        self.assertIsNone(device_identity_key({}))
+        self.assertIsNone(device_identity_key(None))
 
 
 class OpenButtonAndControlStateTests(unittest.TestCase):

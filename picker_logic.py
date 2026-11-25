@@ -101,6 +101,20 @@ def port_event_message(port, event):
     return f"Port: {port} is {event}"
 
 
+UNKNOWN_DEVICE_MESSAGE = "Device: Unknown Device"
+
+
+def device_identity_key(device):
+    """Manufacturer + model; None if both are empty."""
+    if not device:
+        return None
+    manufacturer = (device.get("manufacturer") or "").strip()
+    model = (device.get("model") or "").strip()
+    if not manufacturer and not model:
+        return None
+    return (manufacturer, model)
+
+
 def device_message_text(device):
     if not device:
         return "Device:"
@@ -111,6 +125,15 @@ def device_message_text(device):
     ]
     name = " ".join(part for part in parts if part)
     return f"Device: {name}" if name else "Device:"
+
+
+def identified_device_message(identified_device, selected_device):
+    """Bottom Device: line. Unknown until this port is identified as the dropdown device."""
+    identified_key = device_identity_key(identified_device)
+    if identified_key and identified_key == device_identity_key(selected_device):
+        text = device_message_text(identified_device)
+        return text if text != "Device:" else UNKNOWN_DEVICE_MESSAGE
+    return UNKNOWN_DEVICE_MESSAGE
 
 
 def apply_header_button_click(in_use, scan_ports, scan_devices):

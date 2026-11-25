@@ -289,9 +289,10 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         with patch("serial_port_app.serial.Serial", FakeSerial), patch(
             "serial_port_app.time.sleep"
         ):
-            return app._identify_device_with_defs(
+            result = app._identify_device_with_defs(
                 port, vendor_id, definitions or _load_definitions()
             )
+            return result[0], result[1]
 
     def test_matching_reply_returns_label_and_baud(self):
         FakeSerial.response = b"junk RevPK1.23 01/15/24 more"

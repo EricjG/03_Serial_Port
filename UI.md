@@ -62,7 +62,7 @@ Version: 3.0 — picker behavior from slides 2-3 and the shared theme (Decided i
 When the list is empty, only the header buttons and Exit stay enabled.
 
 ## 4th — Bottom
-- White bar; two message lines on the left replace a Status box, e.g. `Port: COM4 is Closed` and `Device: {Manufacturer} {Model} {Short Description}`
+- White bar; two message lines on the left replace a Status box, e.g. `Port: COM4 is Closed` and `Device: Unknown Device` until Identify or Scan Devices confirms the selected dropdown device on that port, then `Device: {Manufacturer} {Model} {Short Description}`
 - **Exit** then **Select** on the right (**Select** furthest right)
 - Button text center-aligned
 

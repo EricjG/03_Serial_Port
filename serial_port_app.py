@@ -26,8 +26,8 @@ from picker_logic import (
     DEFAULT_PARITY,
     apply_header_button_click,
     check_button_char_width,
-    device_message_text,
     dropdown_ports,
+    identified_device_message,
     format_settings_text,
     format_vid_pid,
     picker_control_state,
@@ -114,6 +114,7 @@ class SerialPortApp:
         self._show_in_use_once = False
         self._suppress_auto_toggle = False
         self._device_entries = []
+        self._identified_device_by_port = {}
         self._devices_load_error = None
 
         self.device_definitions, self._devices_load_error = load_device_file(
@@ -216,6 +217,7 @@ class SerialPortApp:
         self._build_bottom_bar(bottom)
         self._sync_port_selection_ui()
         self._refresh_device_ui(apply_baud=True)
+        self._refresh_identified_device_message()
         if self._devices_load_error:
             self._set_message_lines(device_text=self._devices_load_error)
 
@@ -740,6 +742,32 @@ class SerialPortApp:
             else:
                 self.device_message_var.set(device_text)
 
+    def _set_identified_device(self, port, device):
+        if not port:
+            return
+        if not hasattr(self, "_identified_device_by_port"):
+            self._identified_device_by_port = {}
+        if device:
+            self._identified_device_by_port[port] = device
+        else:
+            self._identified_device_by_port.pop(port, None)
+
+    def _refresh_identified_device_message(self):
+        if getattr(self, "_devices_load_error", None) and not getattr(
+            self, "_device_entries", None
+        ):
+            self._set_message_lines(device_text=self._devices_load_error)
+            return
+        port = self._selected_port()
+        identified_map = getattr(self, "_identified_device_by_port", None) or {}
+        identified = identified_map.get(port) if port else None
+        selected = None
+        if getattr(self, "settings_device_var", None) is not None:
+            selected = self._device_for_label(self.settings_device_var.get())
+        self._set_message_lines(
+            device_text=identified_device_message(identified, selected)
+        )
+
     def _sync_port_selection_ui(self):
         port = self._selected_port()
         row = self._port_row(port) if port else None
@@ -773,6 +801,7 @@ class SerialPortApp:
         self._set_button_enabled(getattr(self, "identify_button", None), state["identify"])
         self._set_button_enabled(getattr(self, "select_button", None), state["select"])
         self._highlight_tree_port(port)
+        self._refresh_identified_device_message()
 
     def _parse_baud(self, text):
         raw = (text or "").strip().upper().replace(" ", "")
@@ -820,10 +849,11 @@ class SerialPortApp:
         device = self._device_for_label(self.settings_device_var.get())
         if not device:
             self._refresh_baud_dropdown(None, apply_default=False)
+            self._refresh_identified_device_message()
             return
         if self._held_port:
             self._refresh_baud_dropdown(device, apply_default=False)
-            self._set_message_lines(device_text=device_message_text(device))
+            self._refresh_identified_device_message()
             return
         params = device.get("serial_parameters") or {}
         self._refresh_baud_dropdown(device, apply_default=True)
@@ -836,7 +866,7 @@ class SerialPortApp:
         flow = params.get("flow_control") or "None"
         self.settings_flow_var.set(flow if flow in FLOW_CHOICES else "None")
         self._refresh_settings_summary()
-        self._set_message_lines(device_text=device_message_text(device))
+        self._refresh_identified_device_message()
 
     def _release_serial(self):
         ser = self._open_serial
@@ -916,19 +946,19 @@ class SerialPortApp:
             self.settings_device_var.set(unique)
             self._suppress_device_apply = False
             self._refresh_baud_dropdown(device, apply_default=False)
+            device = device or self._device_for_label(unique) or self._device_for_label(found)
+            self._set_identified_device(port, device)
             self._set_port_row(
                 port,
                 status="Identified",
                 device_name=found,
                 baud=settings.get("baudrate"),
             )
-            device = device or self._device_for_label(unique) or self._device_for_label(found)
-            self._set_message_lines(
-                port_text=port_event_message(port, "Identified"),
-                device_text=device_message_text(device),
-            )
+            self._set_message_lines(port_text=port_event_message(port, "Identified"))
+            self._refresh_identified_device_message()
         else:
-            self._set_message_lines(device_text="Device: not found")
+            self._set_identified_device(port, None)
+            self._refresh_identified_device_message()
         self._finish_device_scan()
         if was_open and self._reopen_held(port) and not found:
             self._set_port_row(port, status="Open", keep_device=True)
@@ -1359,10 +1389,8 @@ class SerialPortApp:
             else:
                 self._sync_port_selection_ui()
             if not self.port_data:
-                self._set_message_lines(
-                    port_text=port_event_message(None, "Closed"),
-                    device_text="Device:",
-                )
+                self._set_message_lines(port_text=port_event_message(None, "Closed"))
+                self._refresh_identified_device_message()
             return
         self.settings_port_combo["values"] = ports
         if current in ports:
@@ -1491,6 +1519,11 @@ class SerialPortApp:
     def _apply_port_scan_result(self, known_ports, port_data):
         self.known_ports = known_ports
         self.port_data = port_data
+        self._identified_device_by_port = {
+            port: device
+            for port, device in self._identified_device_by_port.items()
+            if port in known_ports
+        }
         self.update_ports_from_data()
         self._refresh_settings_port_list()
         self._finish_port_scan()
@@ -1534,9 +1567,10 @@ class SerialPortApp:
 
     # ---------------------------------------------------- device identify
     def identify_device(self, port, vendor_id, product_id=None):
-        return self._identify_device_with_defs(
+        label, baud, _device = self._identify_device_with_defs(
             port, vendor_id, self.device_definitions, product_id
         )
+        return label, baud
 
     def _canonical_devices(self, device_definitions):
         raw = []
@@ -1552,7 +1586,7 @@ class SerialPortApp:
     def _identify_device_with_defs(
         self, port, vendor_id, device_definitions, product_id=None
     ):
-        """Return (device_column_text_or_None, baud_or_None)."""
+        """Return (device_column_text_or_None, baud_or_None, device_or_None)."""
         for device in self._canonical_devices(device_definitions):
             if not device_matches_ids(device, vendor_id, product_id):
                 continue
@@ -1570,10 +1604,14 @@ class SerialPortApp:
                     ) as ser:
                         match = self._probe_match(ser, device)
                         if match:
-                            return format_device_column(device, match.groupdict()), baud
+                            return (
+                                format_device_column(device, match.groupdict()),
+                                baud,
+                                device,
+                            )
                 except (serial.SerialException, OSError, KeyError, ValueError):
                     continue
-        return None, None
+        return None, None, None
 
     def scan_available_ports(self):
         if not self._device_scan_lock.acquire(blocking=False):
@@ -1598,14 +1636,14 @@ class SerialPortApp:
                 p = by_device.get(port)
                 vid = p.vid if p and p.vid is not None else vendor_id
                 pid = p.pid if p and p.pid is not None else None
-                identified_device, found_baud = self._identify_device_with_defs(
+                identified_device, found_baud, found_def = self._identify_device_with_defs(
                     port, vid, device_definitions, pid
                 )
                 if identified_device:
                     self._log_cont(
                         f"  {port}  VID {vid}  FOUND  {identified_device} @ {found_baud}"
                     )
-                    updates[port] = (identified_device, found_baud)
+                    updates[port] = (identified_device, found_baud, found_def)
                 else:
                     self._log_cont(f"  {port}  VID {vid}  NOT FOUND")
                     if status == "Identified":
@@ -1628,11 +1666,13 @@ class SerialPortApp:
                 result = updates[port]
                 if result is None:
                     # demote Identified → Available
+                    self._set_identified_device(port, None)
                     new_data.append(
                         ("Available", port, vendor_id, None, description, None)
                     )
                 else:
-                    name, found_baud = result
+                    name, found_baud, found_def = result
+                    self._set_identified_device(port, found_def)
                     new_data.append(
                         (
                             "Identified",
@@ -1645,6 +1685,7 @@ class SerialPortApp:
                     )
             self.port_data = new_data
         self.update_ports_from_data()
+        self._refresh_identified_device_message()
         self._finish_device_scan()
 
     def _finish_device_scan(self):
@@ -1673,6 +1714,7 @@ class SerialPortApp:
             comports, by_device = self._comports_by_device()
             known_ports = set(by_device)
             port_data = []
+            identified_map = {}
             held = self._held_port
             held_entry = next(
                 (entry for entry in self.port_data if entry[1] == held),
@@ -1682,6 +1724,8 @@ class SerialPortApp:
             for port_info in comports:
                 if held and port_info.device == held and held_entry is not None:
                     port_data.append(held_entry)
+                    if held in self._identified_device_by_port:
+                        identified_map[held] = self._identified_device_by_port[held]
                     self._log_cont(
                         f"  {port_info.device}  skipped (held open by this app)"
                     )
@@ -1697,12 +1741,13 @@ class SerialPortApp:
                 description = port_info.description or "Unknown"
                 device_name = None
                 baud = None
+                found_def = None
                 if status == "In Use":
                     self._log_cont(
                         f"  {port_info.device}  VID {vendor_id}  skipped (In Use)"
                     )
                 else:
-                    identified, found_baud = self._identify_device_with_defs(
+                    identified, found_baud, found_def = self._identify_device_with_defs(
                         port_info.device, match_vid, device_definitions, match_pid
                     )
                     if identified:
@@ -1714,6 +1759,7 @@ class SerialPortApp:
                             f"{identified} @ {found_baud}"
                         )
                     else:
+                        found_def = None
                         self._log_cont(
                             f"  {port_info.device}  ID {vendor_id}  NOT FOUND"
                         )
@@ -1727,12 +1773,18 @@ class SerialPortApp:
                         baud,
                     )
                 )
+                if found_def is not None:
+                    identified_map[port_info.device] = found_def
 
             self._log_cont("Device scan Done")
             self.root.after(
                 0,
                 lambda: self._apply_retest_result(
-                    device_definitions, known_ports, port_data, load_error
+                    device_definitions,
+                    known_ports,
+                    port_data,
+                    load_error,
+                    identified_map,
                 ),
             )
         except Exception as e:
@@ -1740,10 +1792,16 @@ class SerialPortApp:
             self.root.after(0, self._finish_retest_scan)
 
     def _apply_retest_result(
-        self, device_definitions, known_ports, port_data, load_error=None
+        self,
+        device_definitions,
+        known_ports,
+        port_data,
+        load_error=None,
+        identified_map=None,
     ):
         self.device_definitions = device_definitions
         self._devices_load_error = load_error
+        self._identified_device_by_port = dict(identified_map or {})
         self._refresh_device_ui(apply_baud=not self._held_port)
         self.known_ports = known_ports
         self.port_data = port_data
@@ -1751,6 +1809,8 @@ class SerialPortApp:
         self._refresh_settings_port_list()
         if load_error:
             self._set_message_lines(device_text=load_error)
+        else:
+            self._refresh_identified_device_message()
         self._finish_retest_scan()
 
     def _finish_retest_scan(self):
