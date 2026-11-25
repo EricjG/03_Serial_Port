@@ -353,6 +353,8 @@ class SerialPortApp:
         except tk.TclError:
             y = 0
         cb.place(in_=btn, x=1, y=y, anchor="nw")
+        # Created before the Button, so lift it or Tk draws it underneath.
+        cb.lift(btn)
 
     def _build_status_header(self, parent):
         """Light-blue bar: title left (black); checkbox-on-button controls right-aligned."""
