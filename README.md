@@ -38,11 +38,42 @@ GitHub Actions runs the same command on every push and pull request (Ubuntu and 
 
 ## devices.json fields
 
-Each item under `"devices"` describes one piece of equipment:
+Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted.
 
-- `vendor_ids` — USB vendor ID(s) as decimal strings. A port is matched to definitions that list that vendor ID.
-- `manufacturer`, `model`, `short_description`, `long_description` — name and notes. The Device/Driver column for an identified port uses manufacturer, model, and long description.
-- `serial_parameters` — `baudrate`, `parity`, `stopbits`, `bytesize` used when talking to the device.
-- `commands.initialize` / `commands.identify` — `message` to send and `pause` (seconds) to wait.
-- `response.regex` — pattern that must appear in the device's reply to count as a match. Named groups like `(?P<model>...)` are allowed.
-- `response.device_column` — template text stored with the device (for example `SIMCom {model}`).
+- `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
+- `short_description`, `long_description` — notes. The Device dropdown uses manufacturer, model, and long description.
+- `controllers` — USB-serial chips this device may sit behind. `vid` / `pid` are hex strings (`"0x10C4"`). If `pid` is omitted, any product ID from that vendor matches.
+- `serial_parameters.baud_rates` — baud values tried in order (bps). The picker's Baud dropdown shows this list; if it is missing, the standard baud list is used. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
+- `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped.
+- `response.regex` — pattern that must appear in the reply. Named groups like `(?P<revision>...)` are allowed.
+- `response.device_column` — text for an identified row, filled from regex groups and device fields (for example `Revision {revision}`).
+
+Example:
+
+```json
+{
+  "devices": [
+    {
+      "manufacturer": "MUX Wiring",
+      "model": "MB607",
+      "type": "Body Control Module",
+      "controllers": [{"vid": "0x10C4", "pid": "0xEA60"}],
+      "serial_parameters": {
+        "baud_rates": [460800, 115200],
+        "data_bits": 8,
+        "parity": "None",
+        "stop_bits": 1,
+        "flow_control": "None"
+      },
+      "commands": {
+        "initialize": {"message": "\r\r", "pause_ms": 1000},
+        "identify": {"message": "I\r", "pause_ms": 1000}
+      },
+      "response": {
+        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
+        "device_column": "Revision {revision}"
+      }
+    }
+  ]
+}
+```

@@ -1,56 +1,65 @@
 {
   "devices": [
     {
-      "vendor_ids": [
-        "1027"
-      ],
       "manufacturer": "SIMCom",
       "model": "SIM7080",
+      "type": "Cellular Module",
       "short_description": "",
       "long_description": "",
+      "controllers": [
+        {
+          "vid": "0x0403"
+        }
+      ],
       "serial_parameters": {
-        "baudrate": 115200,
-        "parity": "N",
-        "stopbits": 1,
-        "bytesize": 8
+        "baud_rates": [115200],
+        "data_bits": 8,
+        "parity": "None",
+        "stop_bits": 1,
+        "flow_control": "None"
       },
       "commands": {
         "initialize": {
           "message": "AT\r",
-          "pause": 1
+          "pause_ms": 1000
         },
         "identify": {
           "message": "AT+GMM\r",
-          "pause": 2
+          "pause_ms": 2000
         }
       },
       "response": {
         "regex": "SIMCOM_(?P<model>SIM7080)",
-        "device_column": "SIMCom {model}"
+        "device_column": "{manufacturer} {model}"
       }
     },
     {
-      "vendor_ids": [
-        "4292"
-      ],
       "manufacturer": "MUX Wiring",
       "model": "MB607",
+      "type": "Body Control Module",
       "short_description": "Body Control Module",
       "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+      "controllers": [
+        {
+          "vid": "0x10C4",
+          "pid": "0xEA60"
+        }
+      ],
       "serial_parameters": {
-        "baudrate": 460800,
-        "parity": "N",
-        "stopbits": 1,
-        "bytesize": 8
+        "baud_rates": [460800, 115200],
+        "data_bits": 8,
+        "parity": "None",
+        "stop_bits": 1,
+        "flow_control": "None"
       },
       "commands": {
         "initialize": {
           "message": "\r\r",
-          "pause": 1
+          "pause_ms": 1000
         },
         "identify": {
           "message": "I\r",
-          "pause": 1
+          "pause_ms": 1000
         }
       },
       "response": {
@@ -59,56 +68,31 @@
       }
     },
     {
-      "vendor_ids": [
-        "4292"
-      ],
-      "manufacturer": "MUX Wiring",
-      "model": "MB607",
-      "short_description": "Body Control Module",
-      "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
-      "serial_parameters": {
-        "baudrate": 115200,
-        "parity": "N",
-        "stopbits": 1,
-        "bytesize": 8
-      },
-      "commands": {
-        "initialize": {
-          "message": "\r\r",
-          "pause": 1
-        },
-        "identify": {
-          "message": "I\r",
-          "pause": 1
-        }
-      },
-      "response": {
-        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
-        "device_column": "Revision {revision}"
-      }
-    },
-    {
-      "vendor_ids": [
-        "1234"
-      ],
       "manufacturer": "Rohde & Schwarz",
       "model": "HMP4040",
+      "type": "Power Supply",
       "short_description": "",
       "long_description": "",
+      "controllers": [
+        {
+          "vid": "0x04D2"
+        }
+      ],
       "serial_parameters": {
-        "baudrate": 9600,
-        "parity": "N",
-        "stopbits": 1,
-        "bytesize": 8
+        "baud_rates": [9600],
+        "data_bits": 8,
+        "parity": "None",
+        "stop_bits": 1,
+        "flow_control": "None"
       },
       "commands": {
         "initialize": {
           "message": "",
-          "pause": 1
+          "pause_ms": 1000
         },
         "identify": {
           "message": "*idn?\r",
-          "pause": 1
+          "pause_ms": 1000
         }
       },
       "response": {
@@ -117,32 +101,36 @@
       }
     },
     {
-      "vendor_ids": [
-        "4592"
-      ],
       "manufacturer": "ESO",
       "model": "S-Woom32",
+      "type": "",
       "short_description": "",
       "long_description": "",
+      "controllers": [
+        {
+          "vid": "0x11F0"
+        }
+      ],
       "serial_parameters": {
-        "baudrate": 9600,
-        "parity": "N",
-        "stopbits": 1.0,
-        "bytesize": 8
+        "baud_rates": [9600],
+        "data_bits": 8,
+        "parity": "None",
+        "stop_bits": 1,
+        "flow_control": "None"
       },
       "commands": {
         "initialize": {
           "message": "",
-          "pause": 1
+          "pause_ms": 1000
         },
         "identify": {
           "message": "",
-          "pause": 1
+          "pause_ms": 1000
         }
       },
       "response": {
         "regex": "",
-        "device_column": ""
+        "device_column": "{manufacturer} {model}"
       }
     }
   ]

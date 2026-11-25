@@ -7,11 +7,21 @@ import tkinter.ttk as ttk
 import tkinter.font as tkfont
 from serial.tools import list_ports  # requires pyserial package: pip install pyserial
 import serial  # requires pyserial package: pip install pyserial
-import json
 import re
 import threading
 import time
 
+from device_data import (
+    baud_rates_for_device,
+    command_steps,
+    connected_device_label,
+    default_baud,
+    device_matches_ids,
+    format_device_column,
+    load_device_file,
+    migrate_device,
+    parse_usb_id,
+)
 from picker_logic import (
     DEFAULT_PARITY,
     apply_header_button_click,
@@ -25,6 +35,8 @@ from picker_logic import (
     unique_device_labels,
     visible_tree_rows,
 )
+
+DEVICES_JSON = "devices.json"
 
 APP_VERSION = "3.0"
 AUTO_PORT_SCAN_MS = 1000  # wait before each auto port-scan sequence
@@ -102,9 +114,11 @@ class SerialPortApp:
         self._show_in_use_once = False
         self._suppress_auto_toggle = False
         self._device_entries = []
+        self._devices_load_error = None
 
-        with open("devices.json", "r") as f:
-            self.device_definitions = json.load(f)
+        self.device_definitions, self._devices_load_error = load_device_file(
+            DEVICES_JSON
+        )
         self._rebuild_device_entries()
 
         style = ttk.Style()
@@ -201,6 +215,9 @@ class SerialPortApp:
         bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
         self._build_bottom_bar(bottom)
         self._sync_port_selection_ui()
+        self._refresh_device_ui(apply_baud=True)
+        if self._devices_load_error:
+            self._set_message_lines(device_text=self._devices_load_error)
 
     def _build_status_tree(self, parent):
         """Port list in blue box; column titles live in the blue area, aligned to columns."""
@@ -511,13 +528,12 @@ class SerialPortApp:
             "write", lambda *_a: self._sync_port_selection_ui()
         )
 
-        # Baud: dropdown + manual entry; no '* Manual Entry *' item
-        baud_labels = [s for _, s in BAUD_SHORT]
+        # Baud: dropdown + manual entry; device list, else the standard list
         _, self.settings_baud_combo = self._labeled_combo(
             row1,
             "Baud",
             self.settings_baud_var,
-            baud_labels,
+            self._baud_labels_for_device(None),
             10,
             bg=UI_HEADER,
             editable=True,
@@ -593,8 +609,42 @@ class SerialPortApp:
 
     def _rebuild_device_entries(self):
         devices = self.device_definitions.get("devices", [])
-        bases = [self._connected_device_label(item) or "device" for item in devices]
+        bases = [connected_device_label(item) or "device" for item in devices]
         self._device_entries = list(zip(unique_device_labels(bases), devices))
+
+    def _baud_labels_for_device(self, device):
+        labels = []
+        for baud in baud_rates_for_device(device):
+            shown = self.format_baud(baud)
+            labels.append(shown if shown else str(baud))
+        return labels
+
+    def _refresh_baud_dropdown(self, device=None, *, apply_default=False):
+        combo = getattr(self, "settings_baud_combo", None)
+        if combo is None:
+            return
+        if device is None:
+            device = self._device_for_label(self.settings_device_var.get())
+        labels = self._baud_labels_for_device(device)
+        combo["values"] = labels
+        if apply_default and labels:
+            default = default_baud(device)
+            shown = self.format_baud(default) if default is not None else None
+            self.settings_baud_var.set(shown or labels[0])
+
+    def _refresh_device_ui(self, *, apply_baud=False):
+        self._rebuild_device_entries()
+        names = [label for label, _device in self._device_entries] or ["(no devices)"]
+        combo = getattr(self, "settings_device_combo", None)
+        if combo is not None:
+            current = self.settings_device_var.get()
+            combo["values"] = names
+            if current not in names:
+                self.settings_device_var.set(names[0])
+        device = self._device_for_label(self.settings_device_var.get())
+        self._refresh_baud_dropdown(
+            device, apply_default=apply_baud and not self._held_port
+        )
 
     def _device_for_unique_label(self, label):
         return next(
@@ -611,8 +661,8 @@ class SerialPortApp:
             for unique, item in self._device_entries:
                 if self._connected_device_label(item) != found_label:
                     continue
-                item_baud = (item.get("serial_parameters") or {}).get("baudrate")
-                if baud is None or item_baud == baud:
+                item_bauds = (item.get("serial_parameters") or {}).get("baud_rates") or []
+                if baud is None or baud in item_bauds:
                     return unique
             return found_label
         return ""
@@ -685,7 +735,10 @@ class SerialPortApp:
         if port_text is not None and getattr(self, "port_message_var", None) is not None:
             self.port_message_var.set(port_text)
         if device_text is not None and getattr(self, "device_message_var", None) is not None:
-            self.device_message_var.set(device_text)
+            if self._devices_load_error and not self._device_entries:
+                self.device_message_var.set(self._devices_load_error)
+            else:
+                self.device_message_var.set(device_text)
 
     def _sync_port_selection_ui(self):
         port = self._selected_port()
@@ -756,7 +809,7 @@ class SerialPortApp:
             (
                 item
                 for item in self.device_definitions.get("devices", [])
-                if self._connected_device_label(item) == label
+                if connected_device_label(item) == label
             ),
             None,
         )
@@ -766,23 +819,22 @@ class SerialPortApp:
             return
         device = self._device_for_label(self.settings_device_var.get())
         if not device:
+            self._refresh_baud_dropdown(None, apply_default=False)
             return
         if self._held_port:
+            self._refresh_baud_dropdown(device, apply_default=False)
             self._set_message_lines(device_text=device_message_text(device))
             return
         params = device.get("serial_parameters") or {}
-        baud = params.get("baudrate")
-        if baud is not None:
-            shown = self.format_baud(baud)
-            if shown:
-                self.settings_baud_var.set(shown)
+        self._refresh_baud_dropdown(device, apply_default=True)
         parity = PARITY_TO_UI.get(str(params.get("parity", "N")).upper(), "None")
         self.settings_parity_var.set(parity)
         self.settings_data_var.set(str(int(float(params.get("bytesize", 8)))))
         stop = params.get("stopbits", 1)
         stop_text = str(int(stop)) if float(stop) == int(float(stop)) else str(stop)
         self.settings_stop_var.set(stop_text)
-        self.settings_flow_var.set("None")
+        flow = params.get("flow_control") or "None"
+        self.settings_flow_var.set(flow if flow in FLOW_CHOICES else "None")
         self._refresh_settings_summary()
         self._set_message_lines(device_text=device_message_text(device))
 
@@ -855,21 +907,22 @@ class SerialPortApp:
         self._set_port_row(port, status="Open", keep_device=True)
         self._set_message_lines(port_text=port_event_message(port, "Open"))
 
-    def _apply_connection_scan(self, port, found, settings, was_open):
+    def _apply_connection_scan(self, port, found, settings, was_open, device=None):
         if found:
             unique = self._unique_label_for_device(
-                None, found_label=found, baud=settings.get("baudrate")
+                device, found_label=connected_device_label(device), baud=settings.get("baudrate")
             )
             self._suppress_device_apply = True
             self.settings_device_var.set(unique)
             self._suppress_device_apply = False
+            self._refresh_baud_dropdown(device, apply_default=False)
             self._set_port_row(
                 port,
                 status="Identified",
                 device_name=found,
                 baud=settings.get("baudrate"),
             )
-            device = self._device_for_label(unique) or self._device_for_label(found)
+            device = device or self._device_for_label(unique) or self._device_for_label(found)
             self._set_message_lines(
                 port_text=port_event_message(port, "Identified"),
                 device_text=device_message_text(device),
@@ -914,28 +967,31 @@ class SerialPortApp:
             daemon=True,
         ).start()
 
-    def _probe_open_port(self, ser, device):
-        pattern = (device.get("response") or {}).get("regex") or ""
+    def _probe_match(self, ser, device):
+        migrated, error = migrate_device(device)
+        if error or migrated is None:
+            return None
+        pattern = (migrated.get("response") or {}).get("regex") or ""
         if not pattern:
-            return False
-        commands = device.get("commands") or {}
-        for key in ("initialize", "identify"):
-            command = commands.get(key) or {}
-            if "message" not in command or "pause" not in command:
-                continue
-            ser.write(str(command["message"]).encode())
-            time.sleep(command["pause"])
+            return None
+        for message, pause_s in command_steps(migrated):
+            ser.write(str(message).encode())
+            time.sleep(pause_s)
         response = ser.read(ser.in_waiting or 100).decode(errors="ignore")
-        return re.search(pattern, response) is not None
+        return re.search(pattern, response)
+
+    def _probe_open_port(self, ser, device):
+        return self._probe_match(ser, device) is not None
 
     def _connection_scan_worker(self, port, settings, device, was_open):
-        label = self._connected_device_label(device) or "device"
+        label = connected_device_label(device) or "device"
         self._log(f"Device scan {port} for {label}...")
         found = None
         try:
             with serial.Serial(port, timeout=2, **settings) as ser:
-                if self._probe_open_port(ser, device):
-                    found = label
+                match = self._probe_match(ser, device)
+                if match:
+                    found = format_device_column(device, match.groupdict())
             if found:
                 self._log_cont(f"  {port}  FOUND  {found}")
             else:
@@ -944,7 +1000,10 @@ class SerialPortApp:
         except (serial.SerialException, OSError, ValueError) as exc:
             self._log_cont(f"Device scan failed: {exc}")
         self.root.after(
-            0, lambda: self._apply_connection_scan(port, found, settings, was_open)
+            0,
+            lambda: self._apply_connection_scan(
+                port, found, settings, was_open, device
+            ),
         )
 
     def _schedule_device_combo_align(self, event=None):
@@ -1237,19 +1296,15 @@ class SerialPortApp:
 
     @staticmethod
     def _connected_device_label(device):
-        """Identified column: Manufacturer model [- long_description]."""
-        name = " ".join(
-            p for p in (device.get("manufacturer"), device.get("model")) if p
-        ).strip()
-        long_desc = (device.get("long_description") or "").strip()
-        if name and long_desc:
-            return f"{name} - {long_desc}"
-        return name or long_desc or None
+        """Dropdown name: Manufacturer model [- long_description]."""
+        return connected_device_label(device)
 
     @staticmethod
     def _vendor_id_in_list(vendor_id, vendor_ids):
-        vid = str(vendor_id)
-        return vid in {str(v) for v in vendor_ids}
+        vid = parse_usb_id(vendor_id)
+        if vid is None:
+            return False
+        return any(parse_usb_id(item) == vid for item in vendor_ids)
 
     def _cancel_auto_port_scan(self):
         if self._auto_port_after_id is not None:
@@ -1478,45 +1533,46 @@ class SerialPortApp:
             self._highlight_tree_port(selected)
 
     # ---------------------------------------------------- device identify
-    def identify_device(self, port, vendor_id):
+    def identify_device(self, port, vendor_id, product_id=None):
         return self._identify_device_with_defs(
-            port, vendor_id, self.device_definitions
+            port, vendor_id, self.device_definitions, product_id
         )
 
-    def _identify_device_with_defs(self, port, vendor_id, device_definitions):
-        """Return (connected_device_label_or_None, baud_or_None)."""
-        for device in device_definitions["devices"]:
-            if not self._vendor_id_in_list(vendor_id, device["vendor_ids"]):
-                continue
-            baud = device["serial_parameters"]["baudrate"]
-            try:
-                with serial.Serial(
-                    port,
-                    baudrate=baud,
-                    parity=device["serial_parameters"]["parity"],
-                    stopbits=device["serial_parameters"]["stopbits"],
-                    bytesize=device["serial_parameters"]["bytesize"],
-                    timeout=2,
-                ) as ser:
-                    init_command = device["commands"]["initialize"]
-                    if "message" in init_command and "pause" in init_command:
-                        ser.write(init_command["message"].encode())
-                        time.sleep(init_command["pause"])
+    def _canonical_devices(self, device_definitions):
+        raw = []
+        if isinstance(device_definitions, dict):
+            raw = device_definitions.get("devices") or []
+        devices = []
+        for item in raw:
+            migrated, error = migrate_device(item)
+            if migrated is not None and not error:
+                devices.append(migrated)
+        return devices
 
-                    id_command = device["commands"]["identify"]
-                    if "message" in id_command and "pause" in id_command:
-                        ser.write(id_command["message"].encode())
-                        time.sleep(id_command["pause"])
-
-                    response = ser.read(ser.in_waiting or 100).decode(errors="ignore")
-                    pattern = (device.get("response") or {}).get("regex") or ""
-                    if not pattern:
-                        continue
-                    match = re.search(pattern, response)
-                    if match:
-                        return self._connected_device_label(device), baud
-            except (serial.SerialException, OSError, KeyError):
+    def _identify_device_with_defs(
+        self, port, vendor_id, device_definitions, product_id=None
+    ):
+        """Return (device_column_text_or_None, baud_or_None)."""
+        for device in self._canonical_devices(device_definitions):
+            if not device_matches_ids(device, vendor_id, product_id):
                 continue
+            params = device.get("serial_parameters") or {}
+            bauds = baud_rates_for_device(device)
+            for baud in bauds:
+                try:
+                    with serial.Serial(
+                        port,
+                        baudrate=baud,
+                        parity=params.get("parity", "N"),
+                        stopbits=params.get("stopbits", 1),
+                        bytesize=params.get("bytesize", 8),
+                        timeout=2,
+                    ) as ser:
+                        match = self._probe_match(ser, device)
+                        if match:
+                            return format_device_column(device, match.groupdict()), baud
+                except (serial.SerialException, OSError, KeyError, ValueError):
+                    continue
         return None, None
 
     def scan_available_ports(self):
@@ -1540,9 +1596,10 @@ class SerialPortApp:
                 if status not in ("Available", "Identified"):
                     continue
                 p = by_device.get(port)
-                vid = str(p.vid) if p and p.vid else vendor_id
+                vid = p.vid if p and p.vid is not None else vendor_id
+                pid = p.pid if p and p.pid is not None else None
                 identified_device, found_baud = self._identify_device_with_defs(
-                    port, vid, device_definitions
+                    port, vid, device_definitions, pid
                 )
                 if identified_device:
                     self._log_cont(
@@ -1611,8 +1668,7 @@ class SerialPortApp:
     def _retest_ports_worker(self):
         self._log("Device scan...")
         try:
-            with open("devices.json", "r") as f:
-                device_definitions = json.load(f)
+            device_definitions, load_error = load_device_file(DEVICES_JSON)
 
             comports, by_device = self._comports_by_device()
             known_ports = set(by_device)
@@ -1636,7 +1692,8 @@ class SerialPortApp:
                     else "Available"
                 )
                 vendor_id = format_vid_pid(port_info.vid, port_info.pid)
-                match_vid = str(port_info.vid) if port_info.vid else vendor_id
+                match_vid = port_info.vid if port_info.vid is not None else vendor_id
+                match_pid = port_info.pid
                 description = port_info.description or "Unknown"
                 device_name = None
                 baud = None
@@ -1646,7 +1703,7 @@ class SerialPortApp:
                     )
                 else:
                     identified, found_baud = self._identify_device_with_defs(
-                        port_info.device, match_vid, device_definitions
+                        port_info.device, match_vid, device_definitions, match_pid
                     )
                     if identified:
                         status = "Identified"
@@ -1675,23 +1732,25 @@ class SerialPortApp:
             self.root.after(
                 0,
                 lambda: self._apply_retest_result(
-                    device_definitions, known_ports, port_data
+                    device_definitions, known_ports, port_data, load_error
                 ),
             )
         except Exception as e:
             self._log_cont(f"Device scan failed: {e}")
             self.root.after(0, self._finish_retest_scan)
 
-    def _apply_retest_result(self, device_definitions, known_ports, port_data):
+    def _apply_retest_result(
+        self, device_definitions, known_ports, port_data, load_error=None
+    ):
         self.device_definitions = device_definitions
-        self._rebuild_device_entries()
-        names = [label for label, _device in self._device_entries] or ["(no devices)"]
-        if getattr(self, "settings_device_combo", None) is not None:
-            self.settings_device_combo["values"] = names
+        self._devices_load_error = load_error
+        self._refresh_device_ui(apply_baud=not self._held_port)
         self.known_ports = known_ports
         self.port_data = port_data
         self.update_ports_from_data()
         self._refresh_settings_port_list()
+        if load_error:
+            self._set_message_lines(device_text=load_error)
         self._finish_retest_scan()
 
     def _finish_retest_scan(self):

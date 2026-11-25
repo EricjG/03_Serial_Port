@@ -34,7 +34,7 @@ Version: 3.0 — picker behavior from slides 2-3 and the shared theme (Decided i
 - Bold UI text
 - **Status** / **Port** / **Baud** / **Port Settings**: labels centered above their box
 - **Status** words: **Available** / **In Use** / **Open** / **Identified**; **None Available** when there are no ports
-- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item
+- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item. Baud lists the selected device's `baud_rates`; if that list is missing, the standard baud list is used.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
 - **Port Settings**: white button, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); single-click opens the dialog
