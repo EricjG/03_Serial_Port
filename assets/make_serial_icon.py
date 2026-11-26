@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-SIZES = (16, 32, 48, 256)
+SIZES = (16, 24, 32, 48, 256)
 ORANGE = (255, 140, 0, 255)  # Iris #FF8C00
 ORANGE_EDGE = (196, 90, 0, 255)
 METAL = (214, 220, 226, 255)
@@ -125,25 +125,75 @@ def draw_db9(size):
     return img
 
 
+def _ico_dib(image):
+    """32-bit BI_RGB DIB for ICO (bottom-up BGRA XOR + 1-bit AND mask).
+
+    Small title-bar sizes on Windows 11 need BMP, not PNG-in-ICO.
+    """
+    import struct
+
+    img = image.convert("RGBA")
+    width, height = img.size
+    pixels = img.load()
+    xor = bytearray()
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            red, green, blue, alpha = pixels[x, y]
+            xor += bytes((blue, green, red, alpha))
+    row_bytes = ((width + 31) // 32) * 4
+    mask = bytearray()
+    for y in range(height - 1, -1, -1):
+        row = bytearray(row_bytes)
+        for x in range(width):
+            _red, _green, _blue, alpha = pixels[x, y]
+            if alpha < 128:
+                row[x // 8] |= 0x80 >> (x % 8)
+        mask.extend(row)
+    header = struct.pack(
+        "<IIIHHIIIIII",
+        40,
+        width,
+        height * 2,
+        1,
+        32,
+        0,
+        len(xor) + len(mask),
+        0,
+        0,
+        0,
+        0,
+    )
+    return header + xor + mask
+
+
 def write_ico(path, images_by_size):
-    """Multi-size ICO with PNG payloads (Vista+). Uses our pre-drawn bitmaps."""
+    """Multi-size ICO: BMP DIB for 16/24/32/48 (title bar), PNG for 256."""
     import io
     import struct
 
     entries = []
     blobs = []
     for size in sorted(images_by_size):
-        buf = io.BytesIO()
-        images_by_size[size].save(buf, format="PNG")
-        blobs.append(buf.getvalue())
-        entries.append(size)
+        image = images_by_size[size]
+        if size >= 256:
+            buf = io.BytesIO()
+            image.save(buf, format="PNG")
+            blob = buf.getvalue()
+            bit_count = 32
+        else:
+            blob = _ico_dib(image)
+            bit_count = 32
+        blobs.append(blob)
+        entries.append((size, bit_count, blob))
     header = struct.pack("<HHH", 0, 1, len(entries))
     offset = 6 + 16 * len(entries)
     directory = []
-    for size, blob in zip(entries, blobs):
-        w = 0 if size >= 256 else size
-        h = 0 if size >= 256 else size
-        directory.append(struct.pack("<BBBBHHII", w, h, 0, 0, 1, 32, len(blob), offset))
+    for size, bit_count, blob in entries:
+        width = 0 if size >= 256 else size
+        height = 0 if size >= 256 else size
+        directory.append(
+            struct.pack("<BBBBHHII", width, height, 0, 0, 1, bit_count, len(blob), offset)
+        )
         offset += len(blob)
     path.write_bytes(header + b"".join(directory) + b"".join(blobs))
 

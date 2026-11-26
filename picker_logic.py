@@ -58,6 +58,23 @@ _FLOW_SUMMARY_LABELS = {
     "XON/XOFF": FLOW_SUMMARY_XON_XOFF,
     "XOFF/XON": FLOW_SUMMARY_XON_XOFF,
 }
+# Single-letter flow for Settings / Port Status: N none, R RTS/CTS, X XON/XOFF.
+FLOW_LETTER_NONE = "N"
+FLOW_LETTER_RTS_CTS = "R"
+FLOW_LETTER_XON_XOFF = "X"
+_FLOW_LETTER = {
+    "None": FLOW_LETTER_NONE,
+    "NONE": FLOW_LETTER_NONE,
+    "N": FLOW_LETTER_NONE,
+    "NO FLOW": FLOW_LETTER_NONE,
+    FLOW_SUMMARY_NONE: FLOW_LETTER_NONE,
+    "RTS/CTS": FLOW_LETTER_RTS_CTS,
+    "R": FLOW_LETTER_RTS_CTS,
+    FLOW_XOFF_XON: FLOW_LETTER_XON_XOFF,
+    "XON/XOFF": FLOW_LETTER_XON_XOFF,
+    "XOFF/XON": FLOW_LETTER_XON_XOFF,
+    "X": FLOW_LETTER_XON_XOFF,
+}
 
 PORT_STATUS_CLOSED = "Closed"
 PORT_STATUS_OPENED = "Opened"
@@ -67,23 +84,27 @@ PORT_STATUS_UNKNOWN = "Unknown"
 DEVICE_STATUS_UNIDENTIFIED = "Nothing Identified"
 DEVICE_STATUS_IDENTIFIED = "Identified"
 
-BAUD_SHORT = [
-    (300, "300"),
-    (1200, "1.2K"),
-    (2400, "2.4K"),
-    (4800, "4.8K"),
-    (9600, "9.6K"),
-    (14400, "14.4K"),
-    (19200, "19.2K"),
-    (28800, "28.8K"),
-    (38400, "38.4K"),
-    (57600, "57.6K"),
-    (115200, "115.2K"),
-    (230400, "230.4K"),
-    (460800, "460.8K"),
-    (921600, "921.6K"),
-]
-BAUD_SHORT_BY_VALUE = {value: label for value, label in BAUD_SHORT}
+# Typical baud values (same set as device_data.STANDARD_BAUD_RATES).
+# Display labels are comma-grouped integers from format_baud_label, not "115.2K".
+BAUD_SHORT_VALUES = (
+    300,
+    1200,
+    2400,
+    4800,
+    9600,
+    14400,
+    19200,
+    28800,
+    38400,
+    57600,
+    115200,
+    230400,
+    460800,
+    921600,
+)
+SETTINGS_JOIN = " - "
+PORT_STATUS_GROUP_SEP = "   "  # three spaces between port, baud, settings
+BAUD_DISPLAY_SAMPLE = "1,000,000"
 
 STATUS_RANK = {
     STATUS_OPEN: 0,
@@ -135,7 +156,7 @@ def unique_labeled_items(items, label_of):
 
 
 def format_flow_summary(flow):
-    """Settings-line flow: No Flow, RTS/CTS, XON/XOFF."""
+    """Long flow names: No Flow, RTS/CTS, XON/XOFF."""
     text = "" if flow is None else str(flow).strip()
     if not text:
         return FLOW_SUMMARY_NONE
@@ -148,10 +169,53 @@ def format_flow_summary(flow):
     return FLOW_SUMMARY_NONE
 
 
+def format_flow_letter(flow):
+    """Single-letter flow: N none, R RTS/CTS, X XON/XOFF."""
+    text = "" if flow is None else str(flow).strip()
+    if not text:
+        return FLOW_LETTER_NONE
+    mapped = _FLOW_LETTER.get(text) or _FLOW_LETTER.get(text.upper())
+    if mapped:
+        return mapped
+    alias = FLOW_ALIASES.get(text) or FLOW_ALIASES.get(text.upper())
+    if alias:
+        return _FLOW_LETTER.get(alias, FLOW_LETTER_XON_XOFF)
+    return FLOW_LETTER_NONE
+
+
+def join_setting_parts(*parts):
+    """Join port-setting tokens with ' - ', skipping blanks."""
+    texts = []
+    for part in parts:
+        if part is None:
+            continue
+        text = str(part).strip()
+        if text:
+            texts.append(text)
+    return SETTINGS_JOIN.join(texts)
+
+
+def serial_frame_parts(data_bits=8, parity="N", stop_bits=1):
+    """Data bits, parity letter, stop bits as separate tokens."""
+    try:
+        size_text = str(int(float(data_bits)))
+    except (TypeError, ValueError):
+        size_text = "8"
+    parity_text = "" if parity is None else str(parity).strip()
+    letter = _PARITY_FRAME_LETTER.get(parity_text) or _PARITY_FRAME_LETTER.get(
+        parity_text.upper()
+    )
+    if letter is None:
+        label = _parity_choice_label(parity_text)
+        letter = _PARITY_FRAME_LETTER.get(label or "", "N")
+    stop_text = _stop_bits_choice_label(stop_bits) or "1"
+    return size_text, letter, stop_text
+
+
 def format_settings_text(data, stop, parity, flow):
-    """8N1 - No Flow. Frame is format_serial_frame; then flow summary."""
-    frame = format_serial_frame(data, parity, stop)
-    return f"{frame} - {format_flow_summary(flow)}"
+    """Settings line: `8 - N - 1 - N` (data - parity - stop - flow)."""
+    size_text, letter, stop_text = serial_frame_parts(data, parity, stop)
+    return join_setting_parts(size_text, letter, stop_text, format_flow_letter(flow))
 
 
 MODE_MANUAL = "manual"
@@ -182,19 +246,8 @@ _PARITY_FRAME_LETTER = {
 
 
 def format_serial_frame(data_bits=8, parity="N", stop_bits=1):
-    """Classic 8N1 shorthand from data bits, parity, and stop bits."""
-    try:
-        size_text = str(int(float(data_bits)))
-    except (TypeError, ValueError):
-        size_text = "8"
-    parity_text = "" if parity is None else str(parity).strip()
-    letter = _PARITY_FRAME_LETTER.get(parity_text) or _PARITY_FRAME_LETTER.get(
-        parity_text.upper()
-    )
-    if letter is None:
-        label = _parity_choice_label(parity_text)
-        letter = _PARITY_FRAME_LETTER.get(label or "", "N")
-    stop_text = _stop_bits_choice_label(stop_bits) or "1"
+    """Classic 8N1 shorthand (scan logs). Settings UI uses format_settings_text."""
+    size_text, letter, stop_text = serial_frame_parts(data_bits, parity, stop_bits)
     return f"{size_text}{letter}{stop_text}"
 
 
@@ -432,7 +485,7 @@ def longest_settings_text(
     parity_choices=PARITY_CHOICES,
     flow_choices=FLOW_CHOICES,
 ):
-    """Longest `8N1 - No Flow` string from the legal lists."""
+    """Longest `8 - N - 1 - N` string from the legal lists."""
     longest = ""
     for data, stop, parity, flow in product(
         data_choices, stop_choices, parity_choices, flow_choices
@@ -443,19 +496,41 @@ def longest_settings_text(
     return longest
 
 
+def parse_baud(text):
+    """Displayed or typed baud → int. Strips commas; still accepts 115.2K."""
+    if text is None:
+        raise ValueError("empty baud")
+    if isinstance(text, bool):
+        raise ValueError("invalid baud")
+    if isinstance(text, int):
+        return int(text)
+    if isinstance(text, float):
+        return int(text)
+    raw = str(text).strip().upper().replace(" ", "").replace(",", "")
+    if not raw:
+        raise ValueError("empty baud")
+    if raw.endswith("K"):
+        return int(round(float(raw[:-1]) * 1000))
+    return int(float(raw))
+
+
 def format_baud_label(baud):
-    """Typical-speeds short label, e.g. 115200 -> 115.2K."""
-    if baud is None:
+    """Full integer with comma thousands separators, e.g. 115200 -> 115,200."""
+    if baud is None or baud == "":
         return None
     try:
-        baud = int(baud)
+        value = parse_baud(baud)
     except (TypeError, ValueError):
         return str(baud)
-    return BAUD_SHORT_BY_VALUE.get(baud, str(baud))
+    return f"{value:,}"
+
+
+BAUD_SHORT = [(value, format_baud_label(value)) for value in BAUD_SHORT_VALUES]
+BAUD_SHORT_BY_VALUE = {value: label for value, label in BAUD_SHORT}
 
 
 def picker_device_label(device, baud_text):
-    """Dropdown text: Manufacturer  model  115.2K Baud."""
+    """Dropdown text: Manufacturer  model  115,200 Baud."""
     if not device:
         return None
     manufacturer = (device.get("manufacturer") or "").strip()
@@ -592,6 +667,16 @@ def normalize_bottom_port_status_kind(kind):
     return _BOTTOM_PORT_STATUS_KIND_ALIASES.get(text.lower(), PORT_STATUS_KIND_SELECTED)
 
 
+def flow_choice_from_serial_flags(settings=None):
+    """pyserial rtscts/xonxoff flags → UI flow choice."""
+    settings = settings or {}
+    if settings.get("rtscts"):
+        return "RTS/CTS"
+    if settings.get("xonxoff"):
+        return FLOW_XOFF_XON
+    return "None"
+
+
 def bottom_port_status_fields_from_serial_settings(settings=None):
     """Open/Identify serial.Serial kwargs → Port Status fields."""
     settings = settings or {}
@@ -600,6 +685,7 @@ def bottom_port_status_fields_from_serial_settings(settings=None):
         "data_bits": settings.get("bytesize", 8),
         "parity": settings.get("parity", "N"),
         "stop_bits": settings.get("stopbits", 1),
+        "flow_control": flow_choice_from_serial_flags(settings),
     }
 
 
@@ -611,6 +697,7 @@ def bottom_port_status_fields_from_device(device, baud=None):
         "data_bits": params.get("data_bits", params.get("bytesize", 8)),
         "parity": params.get("parity", "N"),
         "stop_bits": params.get("stop_bits", params.get("stopbits", 1)),
+        "flow_control": params.get("flow_control", "None"),
     }
 
 
@@ -621,11 +708,12 @@ def bottom_port_status_text(
     data_bits=8,
     parity="N",
     stop_bits=1,
+    flow_control=None,
     **_ignored,
 ):
     """Bottom Port Status. One helper for click / identify / open / fail.
 
-    Click or select: `COM8`. Identified or opened: `COM8 115.2K 8N1`.
+    Click or select: `COM8`. Identified or opened: `COM8   115,200   8 - N - 1 - N`.
     Open failed: `COM8 - Failed to open`.
     """
     name = "" if port is None else str(port).strip()
@@ -633,13 +721,16 @@ def bottom_port_status_text(
         return ""
     kind = normalize_bottom_port_status_kind(kind)
     if kind == PORT_STATUS_KIND_FAILED:
-        return f"{name} - Failed to open"
+        return join_setting_parts(name, "Failed to open")
     if kind in (PORT_STATUS_KIND_OPENED, PORT_STATUS_KIND_IDENTIFIED) and baud is not None:
         baud_text = format_baud_label(baud)
         if not baud_text:
             baud_text = str(baud)
-        frame = format_serial_frame(data_bits, parity, stop_bits)
-        return f"{name} {baud_text} {frame}"
+        settings_text = format_settings_text(data_bits, stop_bits, parity, flow_control)
+        return (
+            f"{name}{PORT_STATUS_GROUP_SEP}{baud_text}"
+            f"{PORT_STATUS_GROUP_SEP}{settings_text}"
+        )
     return name
 
 # Values the Device Status box must fully show. Nothing Identified is the
@@ -695,20 +786,22 @@ def port_status_size_samples(*extra):
         bottom_port_status_text(
             port,
             PORT_STATUS_KIND_OPENED,
-            baud=460800,
+            baud=1000000,
             data_bits=8,
             parity="Space",
             stop_bits=2,
+            flow_control="XON/XOFF",
         ),
         "COM8",
         "COM8 - Failed to open",
-        "COM8 115.2K 8N1",
-        "COM8 460.8K 8N1",
-        "COM8 9.6K 8N1",
-        "COM8 300 8N1",
-        "COM8 1.2K 8N1",
-        "COM8 19.2K 8N1",
-        "COM8 921.6K 8N1",
+        "COM8   115,200   8 - N - 1 - N",
+        "COM8   460,800   8 - N - 1 - N",
+        "COM8   9,600   8 - N - 1 - N",
+        "COM8   300   8 - N - 1 - N",
+        "COM8   1,200   8 - N - 1 - N",
+        "COM8   19,200   8 - N - 1 - N",
+        "COM8   921,600   8 - N - 1 - N",
+        "COM256   1,000,000   8 - S - 2 - X",
     )
     catalog = []
     for item in extra:
