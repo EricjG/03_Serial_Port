@@ -121,6 +121,125 @@ def format_settings_text(data, stop, parity, flow):
     return f"{data} - {stop} - {parity} - {flow}"
 
 
+MODE_MANUAL = "manual"
+MODE_AUTOMATIC = "automatic"
+IDENTIFY_REPLY_PREVIEW = 40
+IDENTIFY_MATCHED = "matched"
+IDENTIFY_NO_RESPONSE = "no response"
+IDENTIFY_SKIPPED_VID_PID = "skipped: VID/PID doesn't match"
+
+_PARITY_FRAME_LETTER = {
+    "None": "N",
+    "Odd": "O",
+    "Even": "E",
+    "Mark": "M",
+    "Space": "S",
+    "N": "N",
+    "O": "O",
+    "E": "E",
+    "M": "M",
+    "S": "S",
+}
+
+
+def format_serial_frame(data_bits=8, parity="N", stop_bits=1):
+    """Classic 8N1 shorthand from data bits, parity, and stop bits."""
+    try:
+        size_text = str(int(float(data_bits)))
+    except (TypeError, ValueError):
+        size_text = "8"
+    parity_text = "" if parity is None else str(parity).strip()
+    letter = _PARITY_FRAME_LETTER.get(parity_text) or _PARITY_FRAME_LETTER.get(
+        parity_text.upper()
+    )
+    if letter is None:
+        label = _parity_choice_label(parity_text)
+        letter = _PARITY_FRAME_LETTER.get(label or "", "N")
+    stop_text = _stop_bits_choice_label(stop_bits) or "1"
+    return f"{size_text}{letter}{stop_text}"
+
+
+def identify_device_name(device):
+    """Manufacturer model, e.g. MUX Wiring MB607."""
+    if not device:
+        return "device"
+    name = " ".join(
+        part
+        for part in (
+            (device.get("manufacturer") or "").strip(),
+            (device.get("model") or "").strip(),
+        )
+        if part
+    )
+    return name or "device"
+
+
+def format_identify_reply_preview(reply, limit=IDENTIFY_REPLY_PREVIEW):
+    """First ~40 chars of a probe reply, Python-repr escaped."""
+    text = "" if reply is None else str(reply)
+    try:
+        width = int(limit)
+    except (TypeError, ValueError):
+        width = IDENTIFY_REPLY_PREVIEW
+    if width < 0:
+        width = IDENTIFY_REPLY_PREVIEW
+    return repr(text[:width])
+
+
+def identify_attempt_result(*, matched=False, skipped_vid_pid=False, reply=None):
+    """Result after one Identify/Scan try: matched, skip, empty, or mismatch."""
+    if skipped_vid_pid:
+        return IDENTIFY_SKIPPED_VID_PID
+    if matched:
+        return IDENTIFY_MATCHED
+    if reply is None or reply == "":
+        return IDENTIFY_NO_RESPONSE
+    return f"reply did not match: {format_identify_reply_preview(reply)}"
+
+
+def identify_attempt_message(
+    device,
+    port,
+    baud,
+    frame,
+    *,
+    matched=False,
+    skipped_vid_pid=False,
+    reply=None,
+):
+    """One log line: Trying <name> on COM5 @ 115200 8N1... <result>."""
+    baud_text = "?" if baud is None or baud == "" else str(baud)
+    port_text = port or "?"
+    frame_text = frame or "8N1"
+    trying = (
+        f"Trying {identify_device_name(device)} on {port_text} "
+        f"@ {baud_text} {frame_text}..."
+    )
+    result = identify_attempt_result(
+        matched=matched, skipped_vid_pid=skipped_vid_pid, reply=reply
+    )
+    return f"{trying} {result}"
+
+
+def ui_settings_from_device(device):
+    """Port Settings values from a device's serial_parameters."""
+    params = (device or {}).get("serial_parameters") or {}
+    data = (
+        _data_bits_choice_label(params.get("data_bits", params.get("bytesize"))) or "8"
+    )
+    stop = (
+        _stop_bits_choice_label(params.get("stop_bits", params.get("stopbits"))) or "1"
+    )
+    parity = _parity_choice_label(params.get("parity")) or DEFAULT_PARITY
+    flow = normalize_flow_choice(params.get("flow_control", params.get("flow")))
+    return {
+        "data_bits": data,
+        "stop_bits": stop,
+        "parity": parity,
+        "flow_control": flow,
+    }
+
+
 def normalize_flow_choice(flow):
     """Map old/alias spellings onto the slide-3 Flow list."""
     text = "" if flow is None else str(flow).strip()
@@ -474,12 +593,18 @@ def apply_device_pick(
     identified_device=None,
     fail_count=0,
     fail_key=None,
+    mode=MODE_MANUAL,
 ):
-    """State after picking a Device. Baud, settings, and Port Status stay put."""
+    """State after picking a Device.
+
+    Manual mode (Device dropdown) leaves baud, Settings, and Port Status
+    unchanged. Automatic mode may apply the device's Port Settings.
+    """
     new_key = device_identity_key(selected_device)
     if new_key != previous_key:
         fail_count = 0
         fail_key = new_key
+    automatic = str(mode or MODE_MANUAL).strip().lower() == MODE_AUTOMATIC
     return {
         "baud": baud,
         "settings": settings,
@@ -490,8 +615,8 @@ def apply_device_pick(
         "fail_count": fail_count,
         "fail_key": fail_key,
         "refresh_baud_list": True,
-        "apply_baud": False,
-        "apply_settings": False,
+        "apply_baud": automatic,
+        "apply_settings": automatic,
         "mark_port_unknown": False,
     }
 

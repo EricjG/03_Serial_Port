@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.4 — Baud list from serial_ports.json (Nov 26, 2026).
+Version: 3.5 — Manual Device pick leaves Port Settings; Identify/Scan log each try (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -69,7 +69,7 @@ Version: 3.4 — Baud list from serial_ports.json (Nov 26, 2026).
 - One row: **Device** combo stretching across, **Identify** at the right
 - Identify is 96px, same width as Open, right edges aligned
 - **Device** dropdown format: `Manufacturer  model  115.2K Baud` (two spaces between fields; baud is that device's first listed rate). Labels stay unique: a second copy of the same name gets ` (2)`
-- Picking a Device changes **Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Settings or Port Status. The Baud *list* stays the chip/standard list (it does not shrink to the device's rates). If the device's first baud is already in that list, Baud preselects it; if not, the list is unchanged, nothing is added, Baud stays as shown, and a note is logged
+- Picking a Device in **Manual** mode changes **Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Baud, Settings (data bits, stop bits, parity, flow control), or Port Status. The Baud *list* stays the chip/standard list (it does not shrink to the device's rates). Only **automatic** mode may apply that device's Port Settings (Scan Devices probes with the device's baud/frame). **Identify** still uses the current Port Settings.
 - **Identify** probes only the device shown in the Device dropdown, using the current settings. Enabled only when this app has the port open. Identify failure does not change Port Status
 - **Select** prints JSON (indented) of the open-port specs (`port`, `baud`, `data_bits`, `stop_bits`, `parity`, `flow_control`) plus `device` (`manufacturer`, `model`, `short_description` after Identify/Scan, otherwise `null`), closes the open port, then quits. If no port is chosen, it prints JSON with `"port": null` and stays open
 - **Exit** and the window X print `{"result": null}`, close the open port, then quit

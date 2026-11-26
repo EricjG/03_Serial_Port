@@ -48,10 +48,13 @@ from device_data import STANDARD_BAUD_RATES  # noqa: E402
 from picker_logic import (  # noqa: E402
     DATA_BITS_CHOICES,
     FLOW_CHOICES,
+    MODE_AUTOMATIC,
+    MODE_MANUAL,
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
     exit_handoff_payload,
     grid_ceil_px,
+    identify_attempt_message,
 )
 from serial_port_app import SerialPortApp, UI_CONTROL_H, UI_PAD  # noqa: E402
 
@@ -422,6 +425,94 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             call.args[0] for call in app._log_cont.call_args_list if call.args
         ]
         self.assertTrue(any("does not match" in text for text in skip_logs))
+        self.assertIn(
+            identify_attempt_message(
+                mb607, "COM3", 9600, "8N1", skipped_vid_pid=True
+            ),
+            skip_logs,
+        )
+
+    def test_identify_logs_reply_when_regex_does_not_match(self):
+        app = _bare_app()
+        app.port_data = [("Open", "COM5", "0x10C4:0xEA60", None, "CP210x", None)]
+        app._log = MagicMock()
+        app._log_cont = MagicMock()
+        app.root = MagicMock()
+        mb607 = _device_by_model("MB607")
+        FakeSerial.response = b"RevPK garbage\r\n"
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._connection_scan_worker(
+                "COM5",
+                {
+                    "baudrate": 115200,
+                    "parity": "N",
+                    "bytesize": 8,
+                    "stopbits": 1,
+                },
+                mb607,
+                True,
+            )
+        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        self.assertIn(
+            identify_attempt_message(
+                mb607, "COM5", 115200, "8N1", reply="RevPK garbage\r\n"
+            ),
+            logs,
+        )
+        self.assertTrue(any("NOT FOUND" in text for text in logs))
+
+    def test_scan_logs_each_baud_try_and_skip(self):
+        app = _bare_app()
+        app._log_cont = MagicMock()
+        mb607 = _device_by_model("MB607")
+        FakeSerial.response = b""
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            label, baud, device = app._identify_device_with_defs(
+                "COM5",
+                "4292",
+                {"devices": [mb607]},
+            )
+        self.assertIsNone(label)
+        self.assertIsNone(baud)
+        self.assertIsNone(device)
+        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        self.assertEqual(
+            logs,
+            [
+                identify_attempt_message(
+                    mb607, "COM5", 460800, "8N1", reply=""
+                ),
+                identify_attempt_message(
+                    mb607, "COM5", 115200, "8N1", reply=""
+                ),
+            ],
+        )
+
+    def test_scan_logs_vid_pid_skip_without_opening_serial(self):
+        app = _bare_app()
+        app._log_cont = MagicMock()
+        mb607 = _device_by_model("MB607")
+        FakeSerial.instances = []
+        with patch("serial_port_app.serial.Serial", FakeSerial):
+            label, baud, _device = app._identify_device_with_defs(
+                "COM5", "9999", {"devices": [mb607]}
+            )
+        self.assertIsNone(label)
+        self.assertIsNone(baud)
+        self.assertEqual(FakeSerial.instances, [])
+        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        self.assertEqual(
+            logs,
+            [
+                identify_attempt_message(
+                    mb607, "COM5", 460800, "8N1", skipped_vid_pid=True
+                )
+            ],
+        )
 
     def test_device_allowed_on_port_follows_controller_rule(self):
         app = _bare_app()
@@ -574,9 +665,83 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_flow_var.set.assert_not_called()
         app._mark_port_status_unknown.assert_not_called()
         app._refresh_settings_summary.assert_not_called()
-        app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=True)
+        app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=False)
         self.assertEqual(app._identify_fail_count, 0)
         app.device_status_var.set.assert_called_with("Unidentified")
+
+    def test_manual_device_pick_does_not_apply_port_settings(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app._suppress_device_apply = False
+        app._identify_fail_count = 0
+        app._identify_fail_key = None
+        app._selected_device_key = None
+        app._identified_device_by_port = {}
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.settings_baud_var = MagicMock()
+        app.settings_parity_var = MagicMock()
+        app.settings_data_var = MagicMock()
+        app.settings_stop_var = MagicMock()
+        app.settings_flow_var = MagicMock()
+        app.port_status_var = MagicMock()
+        app.device_status_var = MagicMock()
+        app.port_message_var = app.port_status_var
+        app.device_message_var = app.device_status_var
+        app._refresh_baud_dropdown = MagicMock()
+        app._apply_device_serial_settings = MagicMock()
+        app._refresh_identified_device_message = MagicMock()
+
+        app._apply_selected_device_preferences(mode=MODE_MANUAL)
+
+        app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=False)
+        app._apply_device_serial_settings.assert_not_called()
+        app.settings_baud_var.set.assert_not_called()
+        app.settings_parity_var.set.assert_not_called()
+        app.settings_data_var.set.assert_not_called()
+        app.settings_stop_var.set.assert_not_called()
+        app.settings_flow_var.set.assert_not_called()
+
+    def test_automatic_device_pick_applies_baud_and_settings(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app._suppress_device_apply = False
+        app._identify_fail_count = 0
+        app._identify_fail_key = None
+        app._selected_device_key = None
+        app._identified_device_by_port = {}
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.settings_baud_var = MagicMock()
+        app.settings_parity_var = MagicMock()
+        app.settings_data_var = MagicMock()
+        app.settings_stop_var = MagicMock()
+        app.settings_flow_var = MagicMock()
+        app.settings_summary_var = MagicMock()
+        app.port_status_var = MagicMock()
+        app.device_status_var = MagicMock()
+        app.port_message_var = app.port_status_var
+        app.device_message_var = app.device_status_var
+        app._refresh_baud_dropdown = MagicMock()
+        app._refresh_identified_device_message = MagicMock()
+        app.settings_summary = None
+
+        app._apply_selected_device_preferences(mode=MODE_AUTOMATIC)
+
+        app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=True)
+        app.settings_data_var.set.assert_called_with("8")
+        app.settings_stop_var.set.assert_called_with("1")
+        app.settings_parity_var.set.assert_called_with("None")
+        app.settings_flow_var.set.assert_called_with("None")
+        app.settings_summary_var.set.assert_called()
 
     def test_select_payload_with_and_without_catalog_matches(self):
         app = _bare_app()

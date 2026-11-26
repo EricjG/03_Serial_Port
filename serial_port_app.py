@@ -37,6 +37,7 @@ from picker_logic import (
     BAUD_SHORT,
     DEFAULT_PARITY,
     FLOW_XOFF_XON,
+    MODE_MANUAL,
     PORT_STATUS_CLOSED,
     PORT_STATUS_FAILED,
     PORT_STATUS_OPENED,
@@ -49,9 +50,11 @@ from picker_logic import (
     dropdown_ports,
     exit_handoff_payload,
     format_baud_label,
+    format_serial_frame,
     format_settings_text,
     format_vid_pid,
     identified_device_message,
+    identify_attempt_message,
     device_status_size_samples,
     grid_ceil_px,
     longest_settings_text,
@@ -62,6 +65,7 @@ from picker_logic import (
     record_identify_success,
     select_handoff_payload,
     settings_choices_for_picker,
+    ui_settings_from_device,
     unique_device_labels,
     visible_tree_rows,
 )
@@ -895,7 +899,8 @@ class SerialPortApp:
         )
         device_wrap.pack(fill=tk.X)
         self.settings_device_combo.bind(
-            "<<ComboboxSelected>>", lambda _e: self._apply_selected_device_preferences()
+            "<<ComboboxSelected>>",
+            lambda _e: self._apply_selected_device_preferences(mode=MODE_MANUAL),
         )
         self._device_combo_host = device_wrap
 
@@ -1402,11 +1407,11 @@ class SerialPortApp:
             None,
         )
 
-    def _apply_selected_device_preferences(self):
+    def _apply_selected_device_preferences(self, mode=MODE_MANUAL):
         """Picking a Device changes Device Status. Baud list stays chip-driven.
 
-        Settings and Port Status stay. Baud preselects the device's first rate
-        when that rate is already in the serial_ports.json / standard list.
+        Manual mode (Device dropdown) does not change baud or Port Settings.
+        Automatic mode may apply the device's baud and Settings.
         """
         if self._suppress_device_apply:
             return
@@ -1425,12 +1430,30 @@ class SerialPortApp:
             identified_device=identified,
             fail_count=getattr(self, "_identify_fail_count", 0),
             fail_key=getattr(self, "_identify_fail_key", None),
+            mode=mode,
         )
         self._selected_device_key = device_identity_key(device)
         self._identify_fail_count = result["fail_count"]
         self._identify_fail_key = result["fail_key"]
-        self._refresh_baud_dropdown(device, apply_default=True)
+        self._refresh_baud_dropdown(device, apply_default=result["apply_baud"])
+        if result["apply_settings"]:
+            self._apply_device_serial_settings(device)
         self._refresh_identified_device_message()
+
+    def _apply_device_serial_settings(self, device):
+        """Copy a device's serial_parameters into the Port Settings fields."""
+        if not device:
+            return
+        values = ui_settings_from_device(device)
+        if getattr(self, "settings_data_var", None) is not None:
+            self.settings_data_var.set(values["data_bits"])
+        if getattr(self, "settings_stop_var", None) is not None:
+            self.settings_stop_var.set(values["stop_bits"])
+        if getattr(self, "settings_parity_var", None) is not None:
+            self.settings_parity_var.set(values["parity"])
+        if getattr(self, "settings_flow_var", None) is not None:
+            self.settings_flow_var.set(values["flow_control"])
+        self._refresh_settings_summary()
 
     def _release_serial(self):
         ser = self._open_serial
@@ -1624,33 +1647,88 @@ class SerialPortApp:
         ).start()
 
     def _probe_match(self, ser, device):
+        """Return (regex match or None, reply text)."""
         migrated, error = migrate_device(device)
         if error or migrated is None:
-            return None
+            return None, ""
         pattern = (migrated.get("response") or {}).get("regex") or ""
         if not pattern:
-            return None
+            return None, ""
         for message, pause_s in command_steps(migrated):
             ser.write(str(message).encode())
             time.sleep(pause_s)
         response = ser.read(ser.in_waiting or 100).decode(errors="ignore")
-        return re.search(pattern, response)
+        return re.search(pattern, response), response
 
     def _probe_open_port(self, ser, device):
-        return self._probe_match(ser, device) is not None
+        match, _reply = self._probe_match(ser, device)
+        return match is not None
+
+    def _serial_frame_from_params(self, params=None):
+        params = params or {}
+        return format_serial_frame(
+            params.get("bytesize", params.get("data_bits", 8)),
+            params.get("parity", "N"),
+            params.get("stopbits", params.get("stop_bits", 1)),
+        )
+
+    def _serial_frame_from_settings(self, settings=None):
+        settings = settings or {}
+        return format_serial_frame(
+            settings.get("bytesize", 8),
+            settings.get("parity", "N"),
+            settings.get("stopbits", 1),
+        )
+
+    def _scan_print(self, msg):
+        if "_log_cont" in self.__dict__:
+            log = self.__dict__["_log_cont"]
+            if callable(log):
+                log(msg)
+            return
+        if getattr(self, "_log_lock", None) is None:
+            return
+        self._log_cont(msg)
+
+    def _log_identify_attempt(
+        self, device, port, baud, frame, *, matched=False, skipped_vid_pid=False, reply=None
+    ):
+        self._scan_print(
+            identify_attempt_message(
+                device,
+                port,
+                baud,
+                frame,
+                matched=matched,
+                skipped_vid_pid=skipped_vid_pid,
+                reply=reply,
+            )
+        )
 
     def _connection_scan_worker(self, port, settings, device, was_open):
         label = connected_device_label(device) or "device"
         self._log(f"Device scan {port} for {label}...")
         found = None
         try:
+            frame = self._serial_frame_from_settings(settings)
+            baud = (settings or {}).get("baudrate")
             if not self._device_allowed_on_port(device, port):
+                self._log_identify_attempt(
+                    device, port, baud, frame, skipped_vid_pid=True
+                )
                 self._log_cont(f"  {port}  skipped (port ID does not match device)")
             else:
                 with serial.Serial(port, timeout=2, **settings) as ser:
-                    match = self._probe_match(ser, device)
+                    match, reply = self._probe_match(ser, device)
                     if match:
                         found = format_device_column(device, match.groupdict())
+                        self._log_identify_attempt(
+                            device, port, baud, frame, matched=True
+                        )
+                    else:
+                        self._log_identify_attempt(
+                            device, port, baud, frame, reply=reply
+                        )
                 if found:
                     self._log_cont(f"  {port}  FOUND  {found}")
                 else:
@@ -2226,10 +2304,15 @@ class SerialPortApp:
     ):
         """Return (device_column_text_or_None, baud_or_None, device_or_None)."""
         for device in self._canonical_devices(device_definitions):
-            if not device_matches_ids(device, vendor_id, product_id):
-                continue
             params = device.get("serial_parameters") or {}
+            frame = self._serial_frame_from_params(params)
             bauds = baud_rates_for_device(device)
+            if not device_matches_ids(device, vendor_id, product_id):
+                skip_baud = bauds[0] if bauds else None
+                self._log_identify_attempt(
+                    device, port, skip_baud, frame, skipped_vid_pid=True
+                )
+                continue
             for baud in bauds:
                 try:
                     with serial.Serial(
@@ -2240,13 +2323,19 @@ class SerialPortApp:
                         bytesize=params.get("bytesize", 8),
                         timeout=2,
                     ) as ser:
-                        match = self._probe_match(ser, device)
+                        match, reply = self._probe_match(ser, device)
                         if match:
+                            self._log_identify_attempt(
+                                device, port, baud, frame, matched=True
+                            )
                             return (
                                 format_device_column(device, match.groupdict()),
                                 baud,
                                 device,
                             )
+                        self._log_identify_attempt(
+                            device, port, baud, frame, reply=reply
+                        )
                 except (serial.SerialException, OSError, KeyError, ValueError):
                     continue
         return None, None, None
