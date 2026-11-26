@@ -271,7 +271,6 @@ class SerialPortApp:
         self._open_serial = None
         self._held_port = None
         self._suppress_device_apply = False
-        self._show_in_use_once = False
         self._suppress_auto_toggle = False
         self._device_entries = []
         self._identified_device_by_port = {}
@@ -1214,7 +1213,7 @@ class SerialPortApp:
         return None
 
     def _include_in_use_ports(self):
-        return bool(self.show_in_use_var.get() or self._show_in_use_once)
+        return bool(self.show_in_use_var.get())
 
     def _set_combo_enabled(self, combo, enabled, editable=False):
         if combo is None:
@@ -2084,14 +2083,15 @@ class SerialPortApp:
             self._auto_device_after_id = None
 
     def _clear_auto_scans(self):
-        """Exit/shutdown: uncheck all and cancel scheduled loops."""
-        self._stop_all_auto_repeat()
+        """Exit/shutdown: uncheck auto-repeat and cancel scheduled loops."""
+        self._stop_all_auto_repeat("scan_ports")
 
-    def _stop_all_auto_repeat(self):
+    def _stop_all_auto_repeat(self, button):
         in_use, scan_ports, scan_devices = apply_header_button_click(
             self.show_in_use_var.get(),
             self.auto_port_scan_var.get(),
             self.device_scan_var.get(),
+            button,
         )
         self._suppress_auto_toggle = True
         try:
@@ -2616,19 +2616,14 @@ class SerialPortApp:
         if self._suppress_auto_toggle:
             return
         self._log(f"'In Use' checkbox toggled: {self.show_in_use_var.get()}")
-        self._show_in_use_once = False
         self.update_ports_from_data()
         self._refresh_settings_port_list()
-        if self.show_in_use_var.get() or self.auto_port_scan_var.get():
-            self.start_auto_port_scan()
-        elif not self.auto_port_scan_var.get():
-            self._cancel_auto_port_scan()
 
     def toggle_auto_port_scan(self):
         if self._suppress_auto_toggle:
             return
         self._log(f"'Scan Ports' checkbox toggled: {self.auto_port_scan_var.get()}")
-        if self.auto_port_scan_var.get() or self.show_in_use_var.get():
+        if self.auto_port_scan_var.get():
             self.start_auto_port_scan()
         else:
             self._cancel_auto_port_scan()
@@ -2645,7 +2640,7 @@ class SerialPortApp:
             # Leave Identified rows as-is; just stop auto
 
     def start_auto_port_scan(self):
-        if not (self.auto_port_scan_var.get() or self.show_in_use_var.get()):
+        if not self.auto_port_scan_var.get():
             self._auto_port_after_id = None
             return
         if self._device_scan_running:
@@ -2675,23 +2670,21 @@ class SerialPortApp:
         )
 
     def on_in_use_button(self):
-        """One-shot: show In Use ports, then stop all auto-repeat."""
+        """Check In Use, stop Scan Ports auto-repeat, then one-shot refresh."""
         self._log("In Use button clicked")
-        self._stop_all_auto_repeat()
-        self._show_in_use_once = True
+        self._stop_all_auto_repeat("in_use")
         self.update_ports_from_data()
         self._refresh_settings_port_list()
         self.scan_ports(full=True)
 
     def on_scan_ports_button(self):
         self._log("Scan Ports button clicked")
-        self._stop_all_auto_repeat()
-        self._show_in_use_once = False
+        self._stop_all_auto_repeat("scan_ports")
         self.scan_ports(full=True)
 
     def on_scan_devices_button(self):
         self._log("Scan Devices button clicked")
-        self._stop_all_auto_repeat()
+        self._stop_all_auto_repeat("scan_devices")
         self.retest_available_ports()
 
 

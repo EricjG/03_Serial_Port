@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.6 — Scan/Identify log is Port: then Device: lines (Nov 26, 2026).
+Version: 3.7 — In Use is a view filter; Scan Ports owns the auto-scan loop (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -31,8 +31,8 @@ Version: 3.6 — Scan/Identify log is Port: then Device: lines (Nov 26, 2026).
 - Left: **Automated**, vertically centered with the check-buttons
 - Right: In Use / Scan Ports / Scan Devices, right-aligned on the title row, 16px apart, 24px high
 - Checkbox sits on the button (`place(in_=btn)` then `cb.lift(btn)`); the button is sized from the real checkbox width plus the label so the text is never covered
-- A checked box means auto-repeat that action once a second
-- Clicking a header button runs that action once and clears **all three** auto-repeat checkboxes
+- A checked **Scan Ports** or **Scan Devices** box means auto-repeat that action once a second. **In Use** is a view filter only: it shows or hides In Use ports already found and does not start or keep the auto port-scan loop
+- Clicking a header button runs that action once and clears the Scan Ports and Scan Devices auto-repeat checkboxes. Scan Ports / Scan Devices leave the In Use checkbox as-is. The In Use button checks In Use and unchecks Scan Ports
 - **Scan Devices** (header) is unchanged; the Manually-panel button is **Identify**
 - Column titles and cells are left-anchored
 - Fixed column widths: Status 80, Port # 64 (fits `COM99` plus 2px cell padding), ID/Baud 110; Serial Driver / Connected Device fills the rest. The Port *dropdown* stays sized from `/tmp/serialdemo/ttyUSB0`
@@ -43,7 +43,7 @@ Version: 3.6 — Scan/Identify log is Port: then Device: lines (Nov 26, 2026).
 - Single-click a row to select that port (row turns yellow; Port box follows)
 - Identified rows are bold
 - Double-click a row is the same as **Select**
-- In Use rows appear in the list and Port dropdown only when In Use is on (or after a one-shot In Use click)
+- In Use rows appear in the list and Port dropdown only when the In Use checkbox is on
 - List Status column values stay **Available** / **In Use** / **Open** / **Identified** (not the bottom Port Status words)
 - Serial Driver / Connected Device: Available / In Use / Open rows show the matched `serial_ports.json` chip (`manufacturer` + `model`), or the OS description if none matches. Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the identify `device_column` text
 

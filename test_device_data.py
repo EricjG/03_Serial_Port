@@ -390,8 +390,8 @@ class DeviceColumnTests(unittest.TestCase):
         payload, _error = _loaded()
         mb607 = next(d for d in payload["devices"] if d["model"] == "MB607")
         self.assertEqual(
-            format_device_column(mb607, {"revision": "1.23 01/15/24"}),
-            "Revision 1.23 01/15/24",
+            format_device_column(mb607, {"revision": "1.01"}),
+            "Revision 1.01",
         )
         self.assertEqual(
             connected_device_label(mb607),

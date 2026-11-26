@@ -92,6 +92,22 @@ def _bare_app():
     return SerialPortApp.__new__(SerialPortApp)
 
 
+MB607_FLASH_REPLY = "Running Flash        REV= 0010, RevP1.01 003/09/24"
+
+
+class _Flag:
+    """Minimal stand-in for tk.BooleanVar."""
+
+    def __init__(self, value=False):
+        self.value = bool(value)
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = bool(value)
+
+
 def _controller_id_text(device, vendor_id, product_id=None):
     ids = scan_controller_ids(device, vendor_id, product_id)
     if ids is None:
@@ -248,14 +264,19 @@ class VendorIdMatchTests(unittest.TestCase):
 
 
 class RegexAndDeviceColumnTests(unittest.TestCase):
-    def test_mb607_regex_and_identified_label(self):
+    def test_mb607_regex_matches_revp_flash_line(self):
         device = _device_by_model("MB607", baudrate=460800)
-        match = re.search(device["response"]["regex"], "junk RevPK1.23 01/15/24 more")
+        self.assertEqual(
+            device["response"]["regex"],
+            r"RevP(?P<revision>\d+\.\d+)\s+(?P<date>\d+/\d+/\d+)",
+        )
+        self.assertEqual(device["response"]["device_column"], "Revision {revision}")
+        match = re.search(device["response"]["regex"], MB607_FLASH_REPLY)
         self.assertIsNotNone(match)
-        self.assertEqual(match.group("revision"), "1.23 01/15/24")
+        self.assertEqual(match.group("revision"), "1.01")
         self.assertEqual(
             format_device_column(device, match.groupdict()),
-            "Revision 1.23 01/15/24",
+            "Revision 1.01",
         )
         self.assertEqual(
             SerialPortApp._connected_device_label(device),
@@ -406,9 +427,9 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             return result[0], result[1]
 
     def test_matching_reply_returns_label_and_baud(self):
-        FakeSerial.response = b"junk RevPK1.23 01/15/24 more"
+        FakeSerial.response = MB607_FLASH_REPLY.encode()
         label, baud = self._identify("COM5", "4292")
-        self.assertEqual(label, "Revision 1.23 01/15/24")
+        self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 460800)
         self.assertEqual(FakeSerial.instances[0].written, [b"\r\r", b"I\r"])
 
@@ -570,9 +591,9 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
 
     def test_open_failure_on_first_baud_tries_next_baud_in_the_list(self):
         FakeSerial.fail_baudrates = (460800,)
-        FakeSerial.response = b"RevPK1.23 01/15/24"
+        FakeSerial.response = MB607_FLASH_REPLY.encode()
         label, baud = self._identify("COM5", "4292")
-        self.assertEqual(label, "Revision 1.23 01/15/24")
+        self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 115200)
 
     def test_probe_open_port_uses_the_same_regex(self):
@@ -630,7 +651,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
 
     def test_open_failure_logs_error_then_tries_next_baud(self):
         FakeSerial.fail_baudrates = (460800,)
-        FakeSerial.response = b"RevPK1.23 01/15/24"
+        FakeSerial.response = MB607_FLASH_REPLY.encode()
         app = _bare_app()
         app._log_cont = MagicMock()
         mb607 = _device_by_model("MB607")
@@ -640,7 +661,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             label, baud, device = app._identify_device_with_defs(
                 "COM5", "4292", {"devices": [mb607]}
             )
-        self.assertEqual(label, "Revision 1.23 01/15/24")
+        self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 115200)
         logs = _logged(app._log_cont)
         self.assertEqual(
@@ -675,7 +696,7 @@ class ScanLogLayoutTests(FakeSerialTests):
         )
         FakeSerial.responses_by_baud = {
             460800: b"",
-            115200: b"RevPK1.23 01/15/24",
+            115200: MB607_FLASH_REPLY.encode(),
         }
         FakeSerial.response = b""
         with patch("serial_port_app.serial.Serial", FakeSerial), patch(
@@ -1352,6 +1373,102 @@ class DeviceEditorLoadTests(unittest.TestCase):
             loaded,
             [{"vid": "0x0403", "pid": "0x6001"}, {"vid": "0x10C4"}],
         )
+
+
+def _header_app(*, in_use=False, scan_ports=False, scan_devices=False):
+    app = _bare_app()
+    app._suppress_auto_toggle = False
+    app.show_in_use_var = _Flag(in_use)
+    app.auto_port_scan_var = _Flag(scan_ports)
+    app.device_scan_var = _Flag(scan_devices)
+    app._log = MagicMock()
+    app.update_ports_from_data = MagicMock()
+    app._refresh_settings_port_list = MagicMock()
+    app.start_auto_port_scan = MagicMock()
+    app._cancel_auto_port_scan = MagicMock()
+    app._cancel_auto_device_scan = MagicMock()
+    app.scan_ports = MagicMock()
+    app.retest_available_ports = MagicMock()
+    app.root = MagicMock()
+    app._auto_port_after_id = None
+    app._auto_device_after_id = None
+    app._device_scan_after_port = False
+    app._port_scan_running = False
+    app._device_scan_running = False
+    return app
+
+
+class InUseFilterAndHeaderButtonTests(unittest.TestCase):
+    def test_toggle_in_use_only_refreshes_view(self):
+        app = _header_app(in_use=True, scan_ports=False)
+        SerialPortApp.toggle_ports_in_use(app)
+        app.update_ports_from_data.assert_called_once()
+        app._refresh_settings_port_list.assert_called_once()
+        app.start_auto_port_scan.assert_not_called()
+        app._cancel_auto_port_scan.assert_not_called()
+        app.scan_ports.assert_not_called()
+
+    def test_unchecking_in_use_does_not_stop_scan_ports_loop(self):
+        app = _header_app(in_use=False, scan_ports=True)
+        SerialPortApp.toggle_ports_in_use(app)
+        app.start_auto_port_scan.assert_not_called()
+        app._cancel_auto_port_scan.assert_not_called()
+
+    def test_toggle_auto_port_scan_off_stops_even_if_in_use_checked(self):
+        app = _header_app(in_use=True, scan_ports=False)
+        SerialPortApp.toggle_auto_port_scan(app)
+        app.start_auto_port_scan.assert_not_called()
+        app._cancel_auto_port_scan.assert_called_once()
+
+    def test_toggle_auto_port_scan_on_starts_loop(self):
+        app = _header_app(in_use=False, scan_ports=True)
+        SerialPortApp.toggle_auto_port_scan(app)
+        app.start_auto_port_scan.assert_called_once()
+        app._cancel_auto_port_scan.assert_not_called()
+
+    def test_start_auto_port_scan_ignores_in_use_checkbox(self):
+        app = _header_app(in_use=True, scan_ports=False)
+        app._auto_port_after_id = "old"
+        SerialPortApp.start_auto_port_scan(app)
+        self.assertIsNone(app._auto_port_after_id)
+        app.scan_ports.assert_not_called()
+        app.root.after.assert_not_called()
+
+    def test_start_auto_port_scan_runs_when_scan_ports_checked(self):
+        app = _header_app(in_use=False, scan_ports=True)
+        app.root.after.return_value = "after-id"
+        SerialPortApp.start_auto_port_scan(app)
+        app.scan_ports.assert_called_once_with(full=False)
+        app.root.after.assert_called_once()
+        self.assertEqual(app._auto_port_after_id, "after-id")
+
+    def test_in_use_button_checks_in_use_and_stops_scan_ports(self):
+        app = _header_app(in_use=False, scan_ports=True, scan_devices=True)
+        SerialPortApp.on_in_use_button(app)
+        self.assertTrue(app.show_in_use_var.get())
+        self.assertFalse(app.auto_port_scan_var.get())
+        self.assertFalse(app.device_scan_var.get())
+        app._cancel_auto_port_scan.assert_called_once()
+        app.update_ports_from_data.assert_called_once()
+        app._refresh_settings_port_list.assert_called_once()
+        app.scan_ports.assert_called_once_with(full=True)
+
+    def test_scan_ports_button_leaves_in_use_and_does_one_shot_scan(self):
+        app = _header_app(in_use=True, scan_ports=True, scan_devices=True)
+        SerialPortApp.on_scan_ports_button(app)
+        self.assertTrue(app.show_in_use_var.get())
+        self.assertFalse(app.auto_port_scan_var.get())
+        self.assertFalse(app.device_scan_var.get())
+        app.scan_ports.assert_called_once_with(full=True)
+
+    def test_scan_devices_button_leaves_in_use(self):
+        app = _header_app(in_use=True, scan_ports=True, scan_devices=True)
+        SerialPortApp.on_scan_devices_button(app)
+        self.assertTrue(app.show_in_use_var.get())
+        self.assertFalse(app.auto_port_scan_var.get())
+        self.assertFalse(app.device_scan_var.get())
+        app.retest_available_ports.assert_called_once()
+        app.scan_ports.assert_not_called()
 
 
 if __name__ == "__main__":

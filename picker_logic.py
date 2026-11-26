@@ -740,9 +740,15 @@ def select_handoff_payload(
     }
 
 
-def apply_header_button_click(in_use, scan_ports, scan_devices):
-    """Any header button click clears all three auto-repeat flags."""
-    return False, False, False
+def apply_header_button_click(in_use, scan_ports, scan_devices, button):
+    """Header click: stop Scan Ports / Scan Devices auto-repeat.
+
+    In Use is a view filter, not auto-repeat. The In Use button checks it;
+    Scan Ports / Scan Devices leave it as-is.
+    """
+    if button == "in_use":
+        return True, False, False
+    return bool(in_use), False, False
 
 
 CHECK_BUTTON_PAD_PX = 4  # extra pixels past the measured checkbox
