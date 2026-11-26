@@ -52,7 +52,17 @@ A missing or invalid file shows a message and does not crash. If `devices.json` 
 
 The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). The **Baud** dropdown is also driven by that file: a port whose VID/PID matches a chip lists that chip's `serial_parameters.baud_rates` (or `STANDARD_BAUD_RATES` clipped to `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port uses the standard baud list (no 600). Selecting a device in Manual mode does not shrink the Baud list and does not change Baud or Port Settings; only automatic matching may apply the device's settings.
 
-Scan Devices and Identify print one line per try in the terminal, for example `Trying MUX Wiring MB607 on COM5 @ 115200 8N1...` followed by `matched`, `no response`, `reply did not match: '<first ~40 chars, repr-escaped>'`, or `skipped: VID/PID doesn't match`. Existing scan summary lines (`FOUND` / `NOT FOUND` / skipped In Use) stay.
+Scan Devices and Identify print a short log in the terminal. Ports are the outer loop: each port gets one `Port:` header (VID/PID, or `(no USB ID)`), then one `Device:` line per try (devices.json order, then that device's baud list). A VID/PID miss is a single `Skipped` line for that device, not one line per baud. A match stops further bauds for that device. Example:
+
+```
+Device Scanning...
+Port: COM8 (0x10C4/0xEA60)
+Device: SIMCom SIM7080 115200 8N1 (0x0403): Skipped, port ID doesn't match
+Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response
+Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched
+```
+
+Results: `Matched`, `No response`, `No match: '<first ~30 chars, repr-escaped>'`, `Skipped, port ID doesn't match`, or `Error: <short msg>`. In Use ports still get a one-line skip under their `Port:` header. Identify on the open port uses the same layout.
 
 Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
 

@@ -30,6 +30,7 @@ from device_data import (
     match_uart_ic,
     migrate_device,
     parse_usb_id,
+    scan_controller_ids,
     uart_ic_label,
     uart_ic_list,
 )
@@ -53,8 +54,13 @@ from picker_logic import (
     format_serial_frame,
     format_settings_text,
     format_vid_pid,
+    format_port_scan_header,
+    format_scan_usb_id,
     identified_device_message,
     identify_attempt_message,
+    DEVICE_SCANNING,
+    DEVICE_SCAN_DONE,
+    SCAN_ANY_ID,
     device_status_size_samples,
     grid_ceil_px,
     longest_settings_text,
@@ -1690,50 +1696,72 @@ class SerialPortApp:
             return
         self._log_cont(msg)
 
+    def _scan_controller_id_text(self, device, vendor_id, product_id=None):
+        ids = scan_controller_ids(device, vendor_id, product_id)
+        if ids is None:
+            return SCAN_ANY_ID
+        return format_scan_usb_id(ids[0], ids[1], empty=SCAN_ANY_ID)
+
+    def _log_port_header(self, port, vendor_id=None, product_id=None):
+        self._scan_print(format_port_scan_header(port, vendor_id, product_id))
+
     def _log_identify_attempt(
-        self, device, port, baud, frame, *, matched=False, skipped_vid_pid=False, reply=None
+        self,
+        device,
+        baud,
+        frame,
+        controller_id,
+        *,
+        matched=False,
+        skipped_vid_pid=False,
+        reply=None,
+        error=None,
     ):
         self._scan_print(
             identify_attempt_message(
                 device,
-                port,
                 baud,
                 frame,
+                controller_id,
                 matched=matched,
                 skipped_vid_pid=skipped_vid_pid,
                 reply=reply,
+                error=error,
             )
         )
 
     def _connection_scan_worker(self, port, settings, device, was_open):
-        label = connected_device_label(device) or "device"
-        self._log(f"Device scan {port} for {label}...")
         found = None
         try:
+            self._log(DEVICE_SCANNING)
+            vendor_id = self._port_ids_for_match(port)
+            self._log_port_header(port, vendor_id)
             frame = self._serial_frame_from_settings(settings)
             baud = (settings or {}).get("baudrate")
+            controller_id = self._scan_controller_id_text(device, vendor_id)
             if not self._device_allowed_on_port(device, port):
                 self._log_identify_attempt(
-                    device, port, baud, frame, skipped_vid_pid=True
+                    device, baud, frame, controller_id, skipped_vid_pid=True
                 )
-                self._log_cont(f"  {port}  skipped (port ID does not match device)")
             else:
-                with serial.Serial(port, timeout=2, **settings) as ser:
-                    match, reply = self._probe_match(ser, device)
-                    if match:
-                        found = format_device_column(device, match.groupdict())
-                        self._log_identify_attempt(
-                            device, port, baud, frame, matched=True
-                        )
-                    else:
-                        self._log_identify_attempt(
-                            device, port, baud, frame, reply=reply
-                        )
-                if found:
-                    self._log_cont(f"  {port}  FOUND  {found}")
-                else:
-                    self._log_cont(f"  {port}  NOT FOUND")
-            self._log_cont("Device scan Done")
+                try:
+                    with serial.Serial(port, timeout=2, **settings) as ser:
+                        match, reply = self._probe_match(ser, device)
+                        if match:
+                            found = format_device_column(device, match.groupdict())
+                            self._log_identify_attempt(
+                                device, baud, frame, controller_id, matched=True
+                            )
+                        else:
+                            self._log_identify_attempt(
+                                device, baud, frame, controller_id, reply=reply
+                            )
+                except (serial.SerialException, OSError, ValueError) as exc:
+                    self._log_identify_attempt(
+                        device, baud, frame, controller_id, error=exc
+                    )
+                    raise
+            self._log_cont(DEVICE_SCAN_DONE)
         except (serial.SerialException, OSError, ValueError) as exc:
             self._log_cont(f"Device scan failed: {exc}")
         self.root.after(
@@ -2302,15 +2330,30 @@ class SerialPortApp:
     def _identify_device_with_defs(
         self, port, vendor_id, device_definitions, product_id=None
     ):
-        """Return (device_column_text_or_None, baud_or_None, device_or_None)."""
+        """Return (device_column_text_or_None, baud_or_None, device_or_None).
+
+        Ports are the caller's outer loop. Here every device (devices.json
+        order) is finished, including every baud, before returning. A match
+        stops further bauds for that device only; the first match is kept.
+        """
+        found_label = None
+        found_baud = None
+        found_device = None
         for device in self._canonical_devices(device_definitions):
             params = device.get("serial_parameters") or {}
             frame = self._serial_frame_from_params(params)
             bauds = baud_rates_for_device(device)
+            controller_id = self._scan_controller_id_text(
+                device, vendor_id, product_id
+            )
             if not device_matches_ids(device, vendor_id, product_id):
                 skip_baud = bauds[0] if bauds else None
                 self._log_identify_attempt(
-                    device, port, skip_baud, frame, skipped_vid_pid=True
+                    device,
+                    skip_baud,
+                    frame,
+                    controller_id,
+                    skipped_vid_pid=True,
                 )
                 continue
             for baud in bauds:
@@ -2326,19 +2369,24 @@ class SerialPortApp:
                         match, reply = self._probe_match(ser, device)
                         if match:
                             self._log_identify_attempt(
-                                device, port, baud, frame, matched=True
+                                device, baud, frame, controller_id, matched=True
                             )
-                            return (
-                                format_device_column(device, match.groupdict()),
-                                baud,
-                                device,
-                            )
+                            if found_device is None:
+                                found_label = format_device_column(
+                                    device, match.groupdict()
+                                )
+                                found_baud = baud
+                                found_device = device
+                            break
                         self._log_identify_attempt(
-                            device, port, baud, frame, reply=reply
+                            device, baud, frame, controller_id, reply=reply
                         )
-                except (serial.SerialException, OSError, KeyError, ValueError):
+                except (serial.SerialException, OSError, KeyError, ValueError) as exc:
+                    self._log_identify_attempt(
+                        device, baud, frame, controller_id, error=exc
+                    )
                     continue
-        return None, None, None
+        return found_label, found_baud, found_device
 
     def scan_available_ports(self):
         if not self._device_scan_lock.acquire(blocking=False):
@@ -2348,34 +2396,31 @@ class SerialPortApp:
         threading.Thread(target=self._scan_devices_worker, daemon=True).start()
 
     def _scan_devices_worker(self):
-        self._log("Device scan...")
+        self._log(DEVICE_SCANNING)
         try:
             device_definitions = self.device_definitions
             _, by_device = self._comports_by_device()
             # port -> (device_name, baud) or None to demote
             updates = {}
             for status, port, vendor_id, device_name, description, baud in self.port_data:
-                if status == "In Use":
-                    self._log_cont(f"  {port}  skipped (In Use)")
-                    continue
-                if status not in ("Available", "Identified"):
-                    continue
                 p = by_device.get(port)
                 vid = p.vid if p and p.vid is not None else vendor_id
                 pid = p.pid if p and p.pid is not None else None
+                if status == "In Use":
+                    self._log_port_header(port, vid, pid)
+                    self._log_cont("  skipped (In Use)")
+                    continue
+                if status not in ("Available", "Identified"):
+                    continue
+                self._log_port_header(port, vid, pid)
                 identified_device, found_baud, found_def = self._identify_device_with_defs(
                     port, vid, device_definitions, pid
                 )
                 if identified_device:
-                    self._log_cont(
-                        f"  {port}  VID {vid}  FOUND  {identified_device} @ {found_baud}"
-                    )
                     updates[port] = (identified_device, found_baud, found_def)
-                else:
-                    self._log_cont(f"  {port}  VID {vid}  NOT FOUND")
-                    if status == "Identified":
-                        updates[port] = None  # demote
-            self._log_cont("Device scan Done")
+                elif status == "Identified":
+                    updates[port] = None  # demote
+            self._log_cont(DEVICE_SCAN_DONE)
             self.root.after(0, lambda u=updates: self._apply_device_scan_result(u))
         except Exception as e:
             self._log_cont(f"Device scan failed: {e}")
@@ -2435,7 +2480,7 @@ class SerialPortApp:
         threading.Thread(target=self._retest_ports_worker, daemon=True).start()
 
     def _retest_ports_worker(self):
-        self._log("Device scan...")
+        self._log(DEVICE_SCANNING)
         try:
             device_definitions, load_error = load_device_file(DEVICES_JSON)
             serial_ports, uart_error = load_serial_ports_file(SERIAL_PORTS_JSON)
@@ -2456,9 +2501,10 @@ class SerialPortApp:
                     port_data.append(held_entry)
                     if held in self._identified_device_by_port:
                         identified_map[held] = self._identified_device_by_port[held]
-                    self._log_cont(
-                        f"  {port_info.device}  skipped (held open by this app)"
+                    self._log_port_header(
+                        port_info.device, port_info.vid, port_info.pid
                     )
+                    self._log_cont("  skipped (held open by this app)")
                     continue
                 status = (
                     "In Use"
@@ -2472,10 +2518,9 @@ class SerialPortApp:
                 device_name = None
                 baud = None
                 found_def = None
+                self._log_port_header(port_info.device, match_vid, match_pid)
                 if status == "In Use":
-                    self._log_cont(
-                        f"  {port_info.device}  VID {vendor_id}  skipped (In Use)"
-                    )
+                    self._log_cont("  skipped (In Use)")
                 else:
                     identified, found_baud, found_def = self._identify_device_with_defs(
                         port_info.device, match_vid, device_definitions, match_pid
@@ -2484,15 +2529,8 @@ class SerialPortApp:
                         status = "Identified"
                         device_name = identified
                         baud = found_baud
-                        self._log_cont(
-                            f"  {port_info.device}  ID {vendor_id}  FOUND  "
-                            f"{identified} @ {found_baud}"
-                        )
                     else:
                         found_def = None
-                        self._log_cont(
-                            f"  {port_info.device}  ID {vendor_id}  NOT FOUND"
-                        )
                 port_data.append(
                     (
                         status,
@@ -2506,7 +2544,7 @@ class SerialPortApp:
                 if found_def is not None:
                     identified_map[port_info.device] = found_def
 
-            self._log_cont("Device scan Done")
+            self._log_cont(DEVICE_SCAN_DONE)
             self.root.after(
                 0,
                 lambda: self._apply_retest_result(

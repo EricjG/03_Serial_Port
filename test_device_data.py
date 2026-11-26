@@ -30,6 +30,7 @@ from device_data import (
     parse_controllers_text,
     parse_usb_id,
     parse_vid_pid,
+    scan_controller_ids,
     uart_ic_label,
 )
 
@@ -314,6 +315,20 @@ class BaudAndMatchTests(unittest.TestCase):
             self.assertTrue(device_matches_ids(device, "9999"), msg=device)
             self.assertTrue(device_matches_ids(device, None), msg=device)
             self.assertTrue(device_matches_ids(device, "Unknown"), msg=device)
+
+    def test_scan_controller_ids_prefers_the_port_match(self):
+        payload, _error = _loaded()
+        mb607 = next(d for d in payload["devices"] if d["model"] == "MB607")
+        sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")
+        self.assertEqual(scan_controller_ids(mb607, 0x10C4, 0xEA60), (0x10C4, 0xEA60))
+        self.assertEqual(scan_controller_ids(mb607, 0x067B, 0x2303), (0x067B, 0x2303))
+        self.assertEqual(scan_controller_ids(mb607, 0x0403, 0x6001), (0x10C4, 0xEA60))
+        self.assertEqual(scan_controller_ids(sim, 0x10C4, 0xEA60), (0x0403, None))
+        self.assertIsNone(scan_controller_ids({"controllers": []}, 0x10C4, 0xEA60))
+        self.assertEqual(
+            parse_vid_pid("0x10C4/0xEA60"),
+            (0x10C4, 0xEA60),
+        )
 
     def test_explicit_empty_controllers_are_kept_and_not_dropped(self):
         migrated, error = migrate_device(

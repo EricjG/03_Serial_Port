@@ -42,17 +42,22 @@ from device_data import (  # noqa: E402
     load_devices_info_file,
     load_serial_ports_file,
     parse_controllers_text,
+    scan_controller_ids,
 )
 from device_editor import DeviceEditorApp, PORT_VID_PID_LABEL  # noqa: E402
 from device_data import STANDARD_BAUD_RATES  # noqa: E402
 from picker_logic import (  # noqa: E402
     DATA_BITS_CHOICES,
+    DEVICE_SCAN_DONE,
+    DEVICE_SCANNING,
     FLOW_CHOICES,
     MODE_AUTOMATIC,
     MODE_MANUAL,
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
     exit_handoff_payload,
+    format_port_scan_header,
+    format_scan_usb_id,
     grid_ceil_px,
     identify_attempt_message,
 )
@@ -87,12 +92,41 @@ def _bare_app():
     return SerialPortApp.__new__(SerialPortApp)
 
 
+def _controller_id_text(device, vendor_id, product_id=None):
+    ids = scan_controller_ids(device, vendor_id, product_id)
+    if ids is None:
+        return "any"
+    return format_scan_usb_id(ids[0], ids[1], empty="any")
+
+
+def _device_line(
+    device,
+    baud,
+    frame,
+    vendor_id,
+    product_id=None,
+    **result,
+):
+    return identify_attempt_message(
+        device,
+        baud,
+        frame,
+        _controller_id_text(device, vendor_id, product_id),
+        **result,
+    )
+
+
+def _logged(mock_log):
+    return [call.args[0] for call in mock_log.call_args_list if call.args]
+
+
 class FakeSerial:
     """Context-manager stand-in for pyserial.Serial."""
 
     fail_open = False
     fail_baudrates = ()
     response = b""
+    responses_by_baud = {}
     instances = []
 
     def __init__(self, port, **kwargs):
@@ -101,7 +135,14 @@ class FakeSerial:
         self.written = []
         if FakeSerial.fail_open or kwargs.get("baudrate") in FakeSerial.fail_baudrates:
             raise SerialException("port busy")
-        self.in_waiting = len(FakeSerial.response)
+        baud = kwargs.get("baudrate")
+        by_baud = FakeSerial.responses_by_baud or {}
+        if baud in by_baud:
+            data = by_baud[baud]
+        else:
+            data = FakeSerial.response
+        self.response_data = data
+        self.in_waiting = len(data)
         FakeSerial.instances.append(self)
 
     def __enter__(self):
@@ -114,7 +155,7 @@ class FakeSerial:
         self.written.append(data)
 
     def read(self, size=1):
-        return FakeSerial.response
+        return self.response_data
 
 
 class FakeSerialTests(unittest.TestCase):
@@ -122,6 +163,7 @@ class FakeSerialTests(unittest.TestCase):
         FakeSerial.fail_open = False
         FakeSerial.fail_baudrates = ()
         FakeSerial.response = b""
+        FakeSerial.responses_by_baud = {}
         FakeSerial.instances = []
 
 
@@ -425,16 +467,14 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             )
         self.assertEqual(FakeSerial.instances, [])
         app.root.after.assert_called()
-        skip_logs = [
-            call.args[0] for call in app._log_cont.call_args_list if call.args
-        ]
-        self.assertTrue(any("does not match" in text for text in skip_logs))
+        skip_logs = _logged(app._log_cont)
+        self.assertIn(format_port_scan_header("COM3", "0x0403:0x6001"), skip_logs)
         self.assertIn(
-            identify_attempt_message(
-                mb607, "COM3", 9600, "8N1", skipped_vid_pid=True
-            ),
+            _device_line(mb607, 9600, "8N1", "0x0403:0x6001", skipped_vid_pid=True),
             skip_logs,
         )
+        self.assertFalse(any("Trying " in text for text in skip_logs))
+        self.assertFalse(any("does not match device" in text for text in skip_logs))
 
     def test_identify_logs_reply_when_regex_does_not_match(self):
         app = _bare_app()
@@ -458,14 +498,18 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
                 mb607,
                 True,
             )
-        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], format_port_scan_header("COM5", "0x10C4:0xEA60"))
         self.assertIn(
-            identify_attempt_message(
-                mb607, "COM5", 115200, "8N1", reply="RevPK garbage\r\n"
+            _device_line(
+                mb607, 115200, "8N1", "0x10C4:0xEA60", reply="RevPK garbage\r\n"
             ),
             logs,
         )
-        self.assertTrue(any("NOT FOUND" in text for text in logs))
+        self.assertIn(DEVICE_SCAN_DONE, logs)
+        self.assertFalse(any("NOT FOUND" in text for text in logs))
+        self.assertFalse(any("Trying " in text for text in logs))
+        app._log.assert_called_with(DEVICE_SCANNING)
 
     def test_scan_logs_each_baud_try_and_skip(self):
         app = _bare_app()
@@ -483,16 +527,12 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertIsNone(label)
         self.assertIsNone(baud)
         self.assertIsNone(device)
-        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        logs = _logged(app._log_cont)
         self.assertEqual(
             logs,
             [
-                identify_attempt_message(
-                    mb607, "COM5", 460800, "8N1", reply=""
-                ),
-                identify_attempt_message(
-                    mb607, "COM5", 115200, "8N1", reply=""
-                ),
+                _device_line(mb607, 460800, "8N1", "4292", reply=""),
+                _device_line(mb607, 115200, "8N1", "4292", reply=""),
             ],
         )
 
@@ -508,14 +548,10 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertIsNone(label)
         self.assertIsNone(baud)
         self.assertEqual(FakeSerial.instances, [])
-        logs = [call.args[0] for call in app._log_cont.call_args_list if call.args]
+        logs = _logged(app._log_cont)
         self.assertEqual(
             logs,
-            [
-                identify_attempt_message(
-                    mb607, "COM5", 460800, "8N1", skipped_vid_pid=True
-                )
-            ],
+            [_device_line(mb607, 460800, "8N1", "9999", skipped_vid_pid=True)],
         )
 
     def test_device_allowed_on_port_follows_controller_rule(self):
@@ -591,6 +627,239 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             app._identify_device_with_defs("COM5", "1027", _load_definitions())
         slept.assert_any_call(1.0)
         slept.assert_any_call(2.0)
+
+    def test_open_failure_logs_error_then_tries_next_baud(self):
+        FakeSerial.fail_baudrates = (460800,)
+        FakeSerial.response = b"RevPK1.23 01/15/24"
+        app = _bare_app()
+        app._log_cont = MagicMock()
+        mb607 = _device_by_model("MB607")
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            label, baud, device = app._identify_device_with_defs(
+                "COM5", "4292", {"devices": [mb607]}
+            )
+        self.assertEqual(label, "Revision 1.23 01/15/24")
+        self.assertEqual(baud, 115200)
+        logs = _logged(app._log_cont)
+        self.assertEqual(
+            logs,
+            [
+                _device_line(mb607, 460800, "8N1", "4292", error="port busy"),
+                _device_line(mb607, 115200, "8N1", "4292", matched=True),
+            ],
+        )
+
+
+class ScanLogLayoutTests(FakeSerialTests):
+    def _scan_app(self, port_data, definitions, comports):
+        app = _bare_app()
+        app._log = MagicMock()
+        app._log_cont = MagicMock()
+        app.root = MagicMock()
+        app.port_data = port_data
+        app.device_definitions = definitions
+        by_device = {port.device: port for port in comports}
+        app._comports_by_device = MagicMock(return_value=(comports, by_device))
+        return app
+
+    def test_eric_sample_layout_on_one_port(self):
+        sim = _device_by_model("SIM7080")
+        mb607 = _device_by_model("MB607")
+        port = MagicMock(device="COM8", vid=0x10C4, pid=0xEA60)
+        app = self._scan_app(
+            [("Available", "COM8", "0x10C4:0xEA60", None, "CP210x", None)],
+            {"devices": [sim, mb607]},
+            [port],
+        )
+        FakeSerial.responses_by_baud = {
+            460800: b"",
+            115200: b"RevPK1.23 01/15/24",
+        }
+        FakeSerial.response = b""
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._scan_devices_worker()
+        self.assertEqual(
+            _logged(app._log_cont),
+            [
+                "Port: COM8 (0x10C4/0xEA60)",
+                "Device: SIMCom SIM7080 115200 8N1 (0x0403): "
+                "Skipped, port ID doesn't match",
+                "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response",
+                "Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched",
+                DEVICE_SCAN_DONE,
+            ],
+        )
+        app._log.assert_called_with(DEVICE_SCANNING)
+
+    def test_ports_are_outer_loop_then_devices_json_then_baud_list(self):
+        sim = _device_by_model("SIM7080")
+        mb607 = _device_by_model("MB607")
+        p8 = MagicMock(device="COM8", vid=0x10C4, pid=0xEA60)
+        p3 = MagicMock(device="COM3", vid=0x0403, pid=0x6001)
+        app = self._scan_app(
+            [
+                ("Available", "COM8", "0x10C4:0xEA60", None, "CP210x", None),
+                ("Available", "COM3", "0x0403:0x6001", None, "FTDI", None),
+            ],
+            {"devices": [sim, mb607]},
+            [p8, p3],
+        )
+        FakeSerial.response = b""
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._scan_devices_worker()
+        logs = _logged(app._log_cont)
+        port_at = [i for i, line in enumerate(logs) if line.startswith("Port:")]
+        self.assertEqual(
+            [logs[i] for i in port_at],
+            [
+                "Port: COM8 (0x10C4/0xEA60)",
+                "Port: COM3 (0x0403/0x6001)",
+            ],
+        )
+        com8 = [line for line in logs[port_at[0] : port_at[1]] if line.startswith("Device:")]
+        com3 = [line for line in logs[port_at[1] :] if line.startswith("Device:")]
+        self.assertEqual(
+            com8,
+            [
+                "Device: SIMCom SIM7080 115200 8N1 (0x0403): "
+                "Skipped, port ID doesn't match",
+                "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response",
+                "Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): No response",
+            ],
+        )
+        self.assertEqual(
+            com3,
+            [
+                "Device: SIMCom SIM7080 115200 8N1 (0x0403): No response",
+                "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): "
+                "Skipped, port ID doesn't match",
+            ],
+        )
+        self.assertEqual(sum(1 for line in com3 if "MB607" in line), 1)
+        self.assertFalse(any("FOUND" in line or "Trying " in line for line in logs))
+
+    def test_match_stops_further_bauds_but_still_logs_later_devices(self):
+        first = {
+            "manufacturer": "First",
+            "model": "A",
+            "controllers": [{"vid": "0x10C4", "pid": "0xEA60"}],
+            "serial_parameters": {
+                "baud_rates": [460800, 115200],
+                "parity": "N",
+                "stopbits": 1,
+                "bytesize": 8,
+            },
+            "commands": {
+                "initialize": {"message": "", "pause_ms": 0},
+                "identify": {"message": "A\r", "pause_ms": 0},
+            },
+            "response": {"regex": "HELLO", "device_column": "{model}"},
+        }
+        second = {
+            "manufacturer": "Second",
+            "model": "B",
+            "controllers": [{"vid": "0x10C4", "pid": "0xEA60"}],
+            "serial_parameters": {
+                "baud_rates": [9600],
+                "parity": "N",
+                "stopbits": 1,
+                "bytesize": 8,
+            },
+            "commands": {
+                "initialize": {"message": "", "pause_ms": 0},
+                "identify": {"message": "B\r", "pause_ms": 0},
+            },
+            "response": {"regex": "WORLD", "device_column": "{model}"},
+        }
+        app = _bare_app()
+        app._log_cont = MagicMock()
+        FakeSerial.response = b"HELLO"
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            label, baud, device = app._identify_device_with_defs(
+                "COM8",
+                0x10C4,
+                {"devices": [first, second]},
+                0xEA60,
+            )
+        self.assertEqual(label, "A")
+        self.assertEqual(baud, 460800)
+        self.assertEqual(device["model"], "A")
+        self.assertEqual(
+            [inst.kwargs.get("baudrate") for inst in FakeSerial.instances],
+            [460800, 9600],
+        )
+        logs = _logged(app._log_cont)
+        self.assertEqual(
+            logs,
+            [
+                "Device: First A 460800 8N1 (0x10C4/0xEA60): Matched",
+                "Device: Second B 9600 8N1 (0x10C4/0xEA60): No match: 'HELLO'",
+            ],
+        )
+
+    def test_in_use_port_gets_header_and_summary(self):
+        sim = _device_by_model("SIM7080")
+        p3 = MagicMock(device="COM3", vid=0x0403, pid=0x6001)
+        p8 = MagicMock(device="COM8", vid=0x10C4, pid=0xEA60)
+        app = self._scan_app(
+            [
+                ("In Use", "COM3", "0x0403:0x6001", None, "FTDI", None),
+                ("Available", "COM8", "0x10C4:0xEA60", None, "CP210x", None),
+            ],
+            {"devices": [sim]},
+            [p3, p8],
+        )
+        FakeSerial.response = b""
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._scan_devices_worker()
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM3 (0x0403/0x6001)")
+        self.assertEqual(logs[1], "  skipped (In Use)")
+        self.assertEqual(logs[2], "Port: COM8 (0x10C4/0xEA60)")
+        self.assertTrue(logs[3].startswith("Device: SIMCom SIM7080"))
+        self.assertEqual(logs[-1], DEVICE_SCAN_DONE)
+
+    def test_no_usb_id_port_header_and_any_controller(self):
+        empty = {
+            "manufacturer": "Any",
+            "model": "Box",
+            "controllers": [],
+            "serial_parameters": {
+                "baud_rates": [9600],
+                "parity": "N",
+                "stopbits": 1,
+                "bytesize": 8,
+            },
+            "commands": {
+                "initialize": {"message": "", "pause_ms": 0},
+                "identify": {"message": "I\r", "pause_ms": 0},
+            },
+            "response": {"regex": "HELLO", "device_column": "{model}"},
+        }
+        port = MagicMock(device="COM9", vid=None, pid=None)
+        app = self._scan_app(
+            [("Available", "COM9", "Unknown", None, "mystery", None)],
+            {"devices": [empty]},
+            [port],
+        )
+        FakeSerial.response = b"HELLO"
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._scan_devices_worker()
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM9 (no USB ID)")
+        self.assertEqual(logs[1], "Device: Any Box 9600 8N1 (any): Matched")
 
 
 def _standard_baud_labels():

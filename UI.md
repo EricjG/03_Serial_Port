@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.5 — Manual Device pick leaves Port Settings; Identify/Scan log each try (Nov 26, 2026).
+Version: 3.6 — Scan/Identify log is Port: then Device: lines (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)

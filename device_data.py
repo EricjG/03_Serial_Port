@@ -74,9 +74,12 @@ def parse_usb_id(value):
 
 def parse_vid_pid(vid, pid=None):
     """Return (vid_int_or_None, pid_int_or_None). Splits '0x10C4:0xEA60' when pid is omitted."""
-    if pid is None and isinstance(vid, str) and ":" in vid:
-        left, right = vid.split(":", 1)
-        return parse_usb_id(left), parse_usb_id(right)
+    if pid is None and isinstance(vid, str):
+        text = vid.strip()
+        for sep in (":", "/"):
+            if sep in text:
+                left, right = text.split(sep, 1)
+                return parse_usb_id(left), parse_usb_id(right)
     return parse_usb_id(vid), parse_usb_id(pid)
 
 
@@ -218,6 +221,24 @@ def device_matches_ids(device, vid, pid=None):
         if cpid is None or port_pid is None or cpid == port_pid:
             return True
     return False
+
+
+def scan_controller_ids(device, vid=None, pid=None):
+    """Controller (vid, pid) printed on a scan Device line, or None for (any).
+
+    Prefers the controller that matches this port; otherwise the first listed.
+    """
+    controllers = _usable_controllers(device)
+    if not controllers:
+        return None
+    port_vid, port_pid = parse_vid_pid(vid, pid)
+    if port_vid is not None:
+        for cvid, cpid in controllers:
+            if cvid != port_vid:
+                continue
+            if cpid is None or port_pid is None or cpid == port_pid:
+                return (cvid, cpid)
+    return controllers[0]
 
 
 def _parse_hex_id_token(text):

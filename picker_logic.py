@@ -123,10 +123,15 @@ def format_settings_text(data, stop, parity, flow):
 
 MODE_MANUAL = "manual"
 MODE_AUTOMATIC = "automatic"
-IDENTIFY_REPLY_PREVIEW = 40
-IDENTIFY_MATCHED = "matched"
-IDENTIFY_NO_RESPONSE = "no response"
-IDENTIFY_SKIPPED_VID_PID = "skipped: VID/PID doesn't match"
+IDENTIFY_REPLY_PREVIEW = 30
+IDENTIFY_ERROR_PREVIEW = 40
+IDENTIFY_MATCHED = "Matched"
+IDENTIFY_NO_RESPONSE = "No response"
+IDENTIFY_SKIPPED_VID_PID = "Skipped, port ID doesn't match"
+SCAN_NO_USB_ID = "no USB ID"
+SCAN_ANY_ID = "any"
+DEVICE_SCANNING = "Device Scanning..."
+DEVICE_SCAN_DONE = "Device scan Done"
 
 _PARITY_FRAME_LETTER = {
     "None": "N",
@@ -174,8 +179,32 @@ def identify_device_name(device):
     return name or "device"
 
 
+def format_scan_usb_id(vid, pid=None, *, empty=SCAN_NO_USB_ID):
+    """Scan-log USB IDs as 0x10C4/0xEA60. empty is 'no USB ID' or 'any'."""
+    if pid is None and isinstance(vid, str):
+        text = vid.strip()
+        for sep in ("/", ":"):
+            if sep in text:
+                left, right = text.split(sep, 1)
+                vid, pid = left, right
+                break
+    vid_int = _as_int(vid)
+    if vid_int is None:
+        return empty
+    pid_int = _as_int(pid)
+    if pid_int is None:
+        return f"0x{vid_int:04X}"
+    return f"0x{vid_int:04X}/0x{pid_int:04X}"
+
+
+def format_port_scan_header(port, vid=None, pid=None):
+    """One Port: header, e.g. Port: COM8 (0x10C4/0xEA60)."""
+    port_text = port or "?"
+    return f"Port: {port_text} ({format_scan_usb_id(vid, pid)})"
+
+
 def format_identify_reply_preview(reply, limit=IDENTIFY_REPLY_PREVIEW):
-    """First ~40 chars of a probe reply, Python-repr escaped."""
+    """First ~30 chars of a probe reply, Python-repr escaped."""
     text = "" if reply is None else str(reply)
     try:
         width = int(limit)
@@ -186,39 +215,64 @@ def format_identify_reply_preview(reply, limit=IDENTIFY_REPLY_PREVIEW):
     return repr(text[:width])
 
 
-def identify_attempt_result(*, matched=False, skipped_vid_pid=False, reply=None):
-    """Result after one Identify/Scan try: matched, skip, empty, or mismatch."""
+def format_identify_error(exc, limit=IDENTIFY_ERROR_PREVIEW):
+    """Short one-line Error: text from an exception or string."""
+    if exc is None:
+        text = "error"
+    else:
+        raw = str(exc).strip()
+        text = raw.splitlines()[0].strip() if raw else "error"
+    try:
+        width = int(limit)
+    except (TypeError, ValueError):
+        width = IDENTIFY_ERROR_PREVIEW
+    if width < 1:
+        width = IDENTIFY_ERROR_PREVIEW
+    if len(text) > width:
+        text = text[:width].rstrip()
+    return text
+
+
+def identify_attempt_result(
+    *, matched=False, skipped_vid_pid=False, reply=None, error=None
+):
+    """Result after one Identify/Scan try: Matched, skip, empty, mismatch, or Error."""
     if skipped_vid_pid:
         return IDENTIFY_SKIPPED_VID_PID
     if matched:
         return IDENTIFY_MATCHED
+    if error is not None:
+        return f"Error: {format_identify_error(error)}"
     if reply is None or reply == "":
         return IDENTIFY_NO_RESPONSE
-    return f"reply did not match: {format_identify_reply_preview(reply)}"
+    return f"No match: {format_identify_reply_preview(reply)}"
 
 
 def identify_attempt_message(
     device,
-    port,
     baud,
     frame,
+    controller_id=None,
     *,
     matched=False,
     skipped_vid_pid=False,
     reply=None,
+    error=None,
 ):
-    """One log line: Trying <name> on COM5 @ 115200 8N1... <result>."""
+    """One Device: line, e.g. Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched."""
     baud_text = "?" if baud is None or baud == "" else str(baud)
-    port_text = port or "?"
     frame_text = frame or "8N1"
-    trying = (
-        f"Trying {identify_device_name(device)} on {port_text} "
-        f"@ {baud_text} {frame_text}..."
-    )
+    id_text = controller_id or SCAN_ANY_ID
     result = identify_attempt_result(
-        matched=matched, skipped_vid_pid=skipped_vid_pid, reply=reply
+        matched=matched,
+        skipped_vid_pid=skipped_vid_pid,
+        reply=reply,
+        error=error,
     )
-    return f"{trying} {result}"
+    return (
+        f"Device: {identify_device_name(device)} {baud_text} {frame_text} "
+        f"({id_text}): {result}"
+    )
 
 
 def ui_settings_from_device(device):
