@@ -54,7 +54,10 @@ from picker_logic import (
     format_baud_label,
     format_settings_text,
     format_vid_pid,
+    grid_ceil_px,
     identified_device_message,
+    longest_device_status_text,
+    longest_port_status_text,
     longest_settings_text,
     picker_control_state,
     picker_device_label,
@@ -252,6 +255,7 @@ class SerialPortApp:
         self._build_ui()
         self.root.update_idletasks()
         self._size_settings_summary()
+        self._size_status_fields()
         self.root.update_idletasks()
         req_w = self.root.winfo_reqwidth()
         req_h = self.root.winfo_reqheight()
@@ -848,6 +852,30 @@ class SerialPortApp:
             return
         field.configure(width=self._chars_for_text(longest_settings_text(), extra_px=8))
         self._lock_control_size(field.master, field)
+
+    def _outlined_field_chrome_px(self):
+        """Inner padx=4 each side plus the 1px outline each side."""
+        return 8 + 2
+
+    def _size_outlined_status_entry(self, entry, sample):
+        """Fit `sample` fully; wrap width sits on the 8px grid."""
+        if entry is None:
+            return
+        chrome = self._outlined_field_chrome_px()
+        text_px = self._control_font.measure(str(sample))
+        wrap_w = grid_ceil_px(text_px + chrome, UI_PAD)
+        wrap = entry.master
+        wrap.configure(width=wrap_w, height=UI_CONTROL_H)
+        wrap.pack_propagate(False)
+        entry.configure(width=self._chars_for_text(sample, extra_px=chrome))
+
+    def _size_status_fields(self):
+        self._size_outlined_status_entry(
+            getattr(self, "port_status_entry", None), longest_port_status_text()
+        )
+        self._size_outlined_status_entry(
+            getattr(self, "device_status_entry", None), longest_device_status_text()
+        )
 
     def _on_settings_field_click(self, _event=None):
         field = getattr(self, "settings_summary", None)
@@ -1593,14 +1621,13 @@ class SerialPortApp:
 
         status_row = tk.Frame(parent, bg=UI_BOTTOM, height=UI_CONTROL_H)
         status_row.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        status_row.pack_propagate(False)
         self.port_status_var = tk.StringVar(value=PORT_STATUS_CLOSED)
         self.device_status_var = tk.StringVar(value=DEVICE_STATUS_UNIDENTIFIED)
         self.port_message_var = self.port_status_var
         self.device_message_var = self.device_status_var
         self._status_wraps = []
 
-        def status_group(label, var, width):
+        def status_group(label, var, sample):
             group = tk.Frame(status_row, bg=UI_BOTTOM, height=UI_CONTROL_H)
             group.pack(side=tk.LEFT, padx=(0, UI_GROUP_GAP), fill=tk.Y)
             tk.Label(
@@ -1611,12 +1638,19 @@ class SerialPortApp:
                 font=self._font_label,
                 anchor="w",
             ).pack(side=tk.LEFT, padx=(0, UI_GAP), fill=tk.Y)
-            wrap, _entry = self._outlined_entry(group, var, width)
+            wrap, entry = self._outlined_entry(
+                group, var, self._chars_for_text(sample, extra_px=self._outlined_field_chrome_px())
+            )
             wrap.pack(side=tk.LEFT, pady=0)
             self._status_wraps.append(wrap)
+            return entry
 
-        status_group("Port Status:", self.port_status_var, 12)
-        status_group("Device Status:", self.device_status_var, 14)
+        self.port_status_entry = status_group(
+            "Port Status:", self.port_status_var, longest_port_status_text()
+        )
+        self.device_status_entry = status_group(
+            "Device Status:", self.device_status_var, longest_device_status_text()
+        )
 
     def _on_exit(self):
         self._print_handoff_json(exit_handoff_payload())

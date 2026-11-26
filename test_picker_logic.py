@@ -23,6 +23,9 @@ from picker_logic import (
     dropdown_ports,
     english_ordinal,
     exit_handoff_payload,
+    grid_ceil_px,
+    longest_device_status_text,
+    longest_port_status_text,
     format_baud_label,
     format_settings_text,
     format_vid_pid,
@@ -447,6 +450,9 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
         self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
+        self.assertEqual(grid_ceil_px(1, 8), 8)
+        self.assertEqual(grid_ceil_px(64, 8), 64)
+        self.assertEqual(grid_ceil_px(65, 8), 72)
 
 
 class IdentifyFailureOrdinalTests(unittest.TestCase):
@@ -459,6 +465,15 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         self.assertEqual(identify_failure_label(21), "21st Failure")
         self.assertEqual(identify_failure_label(22), "22nd Failure")
         self.assertEqual(identify_failure_label(23), "23rd Failure")
+
+    def test_status_fields_size_to_longest_visible_value(self):
+        self.assertEqual(longest_device_status_text(), "Unidentified")
+        self.assertGreaterEqual(len(longest_device_status_text()), len("Identified"))
+        self.assertGreaterEqual(len(longest_device_status_text()), len("10th Failure"))
+        self.assertGreaterEqual(len(longest_device_status_text()), len("11th Failure"))
+        self.assertEqual(longest_port_status_text(), "Unknown")
+        for word in ("Closed", "Opened", "Failed", "Unknown"):
+            self.assertLessEqual(len(word), len(longest_port_status_text()))
 
     def test_ordinal_helper_teen_and_twenty_cases(self):
         self.assertEqual(english_ordinal(1), "1st")

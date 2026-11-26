@@ -247,6 +247,54 @@ def identify_failure_label(fail_count):
     return f"{english_ordinal(count)} Failure"
 
 
+PORT_STATUS_VALUES = (
+    PORT_STATUS_CLOSED,
+    PORT_STATUS_OPENED,
+    PORT_STATUS_FAILED,
+    PORT_STATUS_UNKNOWN,
+)
+
+# Values the Device Status box must fully show. Unidentified is the longest
+# of these; 10th/11th/21st-style failures are close behind.
+DEVICE_STATUS_VALUE_SAMPLES = (
+    DEVICE_STATUS_UNIDENTIFIED,
+    DEVICE_STATUS_IDENTIFIED,
+    "Failed",
+    "2nd Failure",
+    "3rd Failure",
+    "10th Failure",
+    "11th Failure",
+    "12th Failure",
+    "13th Failure",
+    "21st Failure",
+    "22nd Failure",
+    "23rd Failure",
+)
+
+
+def longest_port_status_text():
+    return max(PORT_STATUS_VALUES, key=len)
+
+
+def longest_device_status_text():
+    samples = list(DEVICE_STATUS_VALUE_SAMPLES)
+    for count in (1, 2, 3, 4, 10, 11, 12, 13, 21, 22, 23, 24):
+        samples.append(identify_failure_label(count))
+    return max(samples, key=len)
+
+
+def grid_ceil_px(px, grid=8):
+    """Round pixel widths up onto the 8px grid."""
+    try:
+        px = int(px)
+    except (TypeError, ValueError):
+        px = 0
+    step = max(int(grid) or 8, 1)
+    if px <= 0:
+        return step
+    return ((px + step - 1) // step) * step
+
+
 def device_status_text(
     identified_device, selected_device, fail_count=0, fail_key=None
 ):

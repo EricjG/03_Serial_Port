@@ -43,8 +43,13 @@ from device_data import (  # noqa: E402
     load_uart_ics_file,
 )
 from device_editor import DeviceEditorApp  # noqa: E402
-from picker_logic import exit_handoff_payload  # noqa: E402
-from serial_port_app import SerialPortApp  # noqa: E402
+from picker_logic import (  # noqa: E402
+    exit_handoff_payload,
+    grid_ceil_px,
+    longest_device_status_text,
+    longest_port_status_text,
+)
+from serial_port_app import SerialPortApp, UI_CONTROL_H, UI_PAD  # noqa: E402
 
 
 def _load_definitions():
@@ -564,6 +569,30 @@ class DevicePickAndHandoffTests(unittest.TestCase):
     def test_exit_payload_is_null_result(self):
         self.assertEqual(exit_handoff_payload(), {"result": None})
         self.assertEqual(json.dumps(exit_handoff_payload()), '{"result": null}')
+
+    def test_status_fields_fit_longest_value_on_8px_grid(self):
+        app = _bare_app()
+        app._control_font = MagicMock()
+        app._control_font.measure.side_effect = lambda s: len(str(s)) * 8
+        device_wrap = MagicMock()
+        port_wrap = MagicMock()
+        device_entry = MagicMock()
+        port_entry = MagicMock()
+        device_entry.master = device_wrap
+        port_entry.master = port_wrap
+        app.device_status_entry = device_entry
+        app.port_status_entry = port_entry
+
+        app._size_status_fields()
+
+        chrome = app._outlined_field_chrome_px()
+        device_w = grid_ceil_px(len(longest_device_status_text()) * 8 + chrome, UI_PAD)
+        port_w = grid_ceil_px(len(longest_port_status_text()) * 8 + chrome, UI_PAD)
+        device_wrap.configure.assert_called_with(width=device_w, height=UI_CONTROL_H)
+        port_wrap.configure.assert_called_with(width=port_w, height=UI_CONTROL_H)
+        self.assertEqual(device_w % UI_PAD, 0)
+        self.assertEqual(port_w % UI_PAD, 0)
+        self.assertGreater(device_w, port_w)
 
 
 class DeviceEditorLoadTests(unittest.TestCase):

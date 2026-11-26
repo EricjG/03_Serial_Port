@@ -89,7 +89,7 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Still inside the orange frame, not in a blue box
 - Left: **Port Status:** [value] and **Device Status:** [value] inline (exception to labels-above)
 - Right: **Select** then **Exit**, each 96px, 8px apart; Exit’s right edge is the common right edge
-- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit
+- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. Each is sized from the longest value it can show (Port Status: **Unknown**; Device Status: **Unidentified**, which is longer than **Identified** and **10th Failure**), with wrap width rounded up to the 8px grid so the bottom row stays on-grid. The fields must show those words in full — not `Unidenti`.
 - Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (Port Settings / Baud changed). Picking a Device does **not** set Port Status to Unknown
 - Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
 - Identify button failures (same device, try-again): **Failed**, then **2nd Failure**, **3rd Failure**, **4th Failure**, … (normal English ordinals: 11th, 21st, 22nd, 23rd). A successful Scan Devices confirmation of the selected device sets **Identified** and clears the count. A Scan Devices miss does not increment this count
