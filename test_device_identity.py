@@ -41,8 +41,9 @@ from device_data import (  # noqa: E402
     load_device_file,
     load_devices_info_file,
     load_serial_ports_file,
+    parse_controllers_text,
 )
-from device_editor import DeviceEditorApp  # noqa: E402
+from device_editor import DeviceEditorApp, PORT_VID_PID_LABEL  # noqa: E402
 from device_data import STANDARD_BAUD_RATES  # noqa: E402
 from picker_logic import (  # noqa: E402
     DATA_BITS_CHOICES,
@@ -375,6 +376,60 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertIsNone(label)
         self.assertIsNone(baud)
         self.assertEqual(FakeSerial.instances, [])
+
+    def test_empty_controllers_are_tried_on_any_port(self):
+        empty = {
+            "devices": [
+                {
+                    "controllers": [],
+                    "manufacturer": "Any",
+                    "model": "Box",
+                    "serial_parameters": {
+                        "baud_rates": [9600],
+                        "parity": "N",
+                        "stopbits": 1,
+                        "bytesize": 8,
+                    },
+                    "commands": {
+                        "initialize": {"message": "", "pause_ms": 0},
+                        "identify": {"message": "I\r", "pause_ms": 0},
+                    },
+                    "response": {"regex": "HELLO", "device_column": "{model}"},
+                }
+            ]
+        }
+        FakeSerial.response = b"HELLO"
+        label, baud = self._identify("COM5", "9999", definitions=empty)
+        self.assertEqual(label, "Box")
+        self.assertEqual(baud, 9600)
+        self.assertEqual(FakeSerial.instances[0].written, [b"I\r"])
+
+    def test_identify_open_port_skips_serial_when_ids_do_not_match(self):
+        app = _bare_app()
+        app.port_data = [("Open", "COM3", "0x0403:0x6001", None, "FTDI", None)]
+        app._log = MagicMock()
+        app._log_cont = MagicMock()
+        app.root = MagicMock()
+        mb607 = _device_by_model("MB607")
+        FakeSerial.instances = []
+        with patch("serial_port_app.serial.Serial", FakeSerial):
+            app._connection_scan_worker(
+                "COM3", {"baudrate": 9600}, mb607, True
+            )
+        self.assertEqual(FakeSerial.instances, [])
+        app.root.after.assert_called()
+        skip_logs = [
+            call.args[0] for call in app._log_cont.call_args_list if call.args
+        ]
+        self.assertTrue(any("does not match" in text for text in skip_logs))
+
+    def test_device_allowed_on_port_follows_controller_rule(self):
+        app = _bare_app()
+        app.port_data = [("Open", "COM3", "0x0403:0x6001", None, "FTDI", None)]
+        self.assertTrue(app._device_allowed_on_port(_device_by_model("SIM7080"), "COM3"))
+        self.assertFalse(app._device_allowed_on_port(_device_by_model("MB607"), "COM3"))
+        self.assertTrue(app._device_allowed_on_port({"controllers": []}, "COM3"))
+        self.assertTrue(app._device_allowed_on_port({}, "COM3"))
 
     def test_empty_regex_device_is_not_identified(self):
         FakeSerial.response = b"anything"
@@ -786,6 +841,20 @@ class DeviceEditorLoadTests(unittest.TestCase):
         self.assertEqual(devices[0]["model"], "SIM7080")
         self.assertEqual(len(devices), len(_load_definitions()["devices"]))
 
+    def test_load_device_details_fills_port_vid_pid_from_controllers(self):
+        editor = self._editor(str(DEVICES_JSON))
+        editor.devices = editor.load_devices()
+        editor.device_dropdown = MagicMock()
+        editor.device_dropdown.current.return_value = 1  # MB607
+        vid_field = MagicMock()
+        editor.fields = {
+            "Manufacturer": MagicMock(),
+            "Model": MagicMock(),
+            PORT_VID_PID_LABEL: vid_field,
+        }
+        editor.load_device_details()
+        vid_field.insert.assert_called_with(0, "0x10C4:0xEA60")
+
     def test_missing_file_or_key_returns_empty_list(self):
         self.assertEqual(
             self._editor(str(ROOT / "no_such_devices.json")).load_devices(),
@@ -799,6 +868,52 @@ class DeviceEditorLoadTests(unittest.TestCase):
             self.assertEqual(self._editor(path).load_devices(), [])
         finally:
             os.unlink(path)
+
+    def test_port_vid_pid_field_round_trip(self):
+        editor = self._editor(str(DEVICES_JSON))
+        editor.fields = {PORT_VID_PID_LABEL: MagicMock()}
+        editor.fields[PORT_VID_PID_LABEL].get.return_value = "0403:6001, 10C4"
+        devices = editor.load_devices()
+        editor.devices = devices
+        editor.device_dropdown = MagicMock()
+        editor.device_dropdown.current.return_value = 0
+        editor.save_devices = MagicMock()
+        editor.fields["Manufacturer"] = MagicMock()
+        editor.fields["Manufacturer"].get.return_value = devices[0]["manufacturer"]
+        editor.fields["Model"] = MagicMock()
+        editor.fields["Model"].get.return_value = devices[0]["model"]
+        for key in (
+            "Baudrate",
+            "Parity",
+            "Stopbits",
+            "Bytesize",
+            "Initialize Command",
+            "Initialize Pause",
+            "Identify Command",
+            "Identify Pause",
+            "Response Regex",
+        ):
+            editor.fields[key] = MagicMock()
+        editor.fields["Baudrate"].get.return_value = "115200"
+        editor.fields["Parity"].get.return_value = "N"
+        editor.fields["Stopbits"].get.return_value = "1"
+        editor.fields["Bytesize"].get.return_value = "8"
+        editor.fields["Initialize Command"].get.return_value = "''"
+        editor.fields["Initialize Pause"].get.return_value = "1"
+        editor.fields["Identify Command"].get.return_value = "''"
+        editor.fields["Identify Pause"].get.return_value = "1"
+        editor.fields["Response Regex"].get.return_value = ""
+        editor.save_changes()
+        self.assertEqual(
+            devices[0]["controllers"],
+            parse_controllers_text("0403:6001, 10C4"),
+        )
+        self.assertNotIn("vendor_ids", devices[0])
+        loaded = devices[0]["controllers"]
+        self.assertEqual(
+            loaded,
+            [{"vid": "0x0403", "pid": "0x6001"}, {"vid": "0x10C4"}],
+        )
 
 
 if __name__ == "__main__":

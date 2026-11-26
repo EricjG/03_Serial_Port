@@ -12,9 +12,11 @@ from device_data import (
     baud_rates_for_picker,
     command_steps,
     connected_device_label,
+    controllers_field_text,
     default_baud,
     device_identity_fields,
     device_matches_ids,
+    format_controllers_text,
     format_device_column,
     format_usb_id,
     identified_connected_label,
@@ -25,6 +27,7 @@ from device_data import (
     match_uart_ic,
     migrate_device,
     migrate_payload,
+    parse_controllers_text,
     parse_usb_id,
     parse_vid_pid,
     uart_ic_label,
@@ -268,6 +271,96 @@ class BaudAndMatchTests(unittest.TestCase):
         sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")
         self.assertTrue(device_matches_ids(sim, "0x0403", 0x6001))
         self.assertTrue(device_matches_ids(sim, 1027))
+
+    def test_multiple_controllers_any_listed_pair_may_match(self):
+        device = {
+            "controllers": [
+                {"vid": "0x0403", "pid": "0x6001"},
+                {"vid": "0x10C4"},
+            ]
+        }
+        self.assertTrue(device_matches_ids(device, "0x0403", "0x6001"))
+        self.assertFalse(device_matches_ids(device, "0x0403", "0x0001"))
+        self.assertTrue(device_matches_ids(device, "0x10C4", "0xEA60"))
+        self.assertTrue(device_matches_ids(device, 0x10C4))
+        self.assertFalse(device_matches_ids(device, "0x067B", "0x2303"))
+
+    def test_pid_is_optional_on_a_controller(self):
+        vid_only = {"controllers": [{"vid": "0x0403"}]}
+        self.assertTrue(device_matches_ids(vid_only, "0x0403", "0x6001"))
+        self.assertTrue(device_matches_ids(vid_only, "0x0403", "0x0001"))
+        self.assertTrue(device_matches_ids(vid_only, "0x0403"))
+        self.assertFalse(device_matches_ids(vid_only, "0x10C4", "0xEA60"))
+        with_pid = {"controllers": [{"vid": "0x0403", "pid": "0x6001"}]}
+        self.assertTrue(device_matches_ids(with_pid, "0x0403", "0x6001"))
+        self.assertFalse(device_matches_ids(with_pid, "0x0403", "0x0001"))
+        self.assertTrue(device_matches_ids(with_pid, "0x0403"))
+
+    def test_empty_controllers_match_every_port(self):
+        for device in (
+            {"controllers": []},
+            {"controllers": None},
+            {},
+            {"controllers": [{}, {"pid": "0x0001"}, "skip"]},
+        ):
+            self.assertTrue(device_matches_ids(device, "0x0403", "0x6001"), msg=device)
+            self.assertTrue(device_matches_ids(device, "9999"), msg=device)
+            self.assertTrue(device_matches_ids(device, None), msg=device)
+            self.assertTrue(device_matches_ids(device, "Unknown"), msg=device)
+
+    def test_explicit_empty_controllers_are_kept_and_not_dropped(self):
+        migrated, error = migrate_device(
+            {"controllers": [], "vendor_ids": ["4292"], "model": "NoIds"}
+        )
+        self.assertIsNone(error)
+        self.assertEqual(migrated["model"], "NoIds")
+        self.assertEqual(migrated["controllers"], [])
+        migrated, error = migrate_device({"controllers": None, "model": "NullIds"})
+        self.assertIsNone(error)
+        self.assertEqual(migrated["controllers"], [])
+        payload, error = migrate_payload(
+            {"devices": [{"controllers": [], "model": "Kept"}]}
+        )
+        self.assertIsNone(error)
+        self.assertEqual(len(payload["devices"]), 1)
+        self.assertEqual(payload["devices"][0]["controllers"], [])
+
+
+class ControllerEditorFieldTests(unittest.TestCase):
+    def test_parse_comma_separated_hex_pid_optional(self):
+        self.assertEqual(
+            parse_controllers_text("0403:6001, 10C4"),
+            [{"vid": "0x0403", "pid": "0x6001"}, {"vid": "0x10C4"}],
+        )
+        self.assertEqual(
+            parse_controllers_text("0x0403:0x6001, 0x10C4"),
+            [{"vid": "0x0403", "pid": "0x6001"}, {"vid": "0x10C4"}],
+        )
+        self.assertEqual(parse_controllers_text(""), [])
+        self.assertEqual(parse_controllers_text("   "), [])
+        self.assertEqual(parse_controllers_text(None), [])
+        self.assertEqual(parse_controllers_text("10C4"), [{"vid": "0x10C4"}])
+
+    def test_format_and_parse_round_trip(self):
+        controllers = [{"vid": "0x0403", "pid": "0x6001"}, {"vid": "0x10C4"}]
+        text = format_controllers_text(controllers)
+        self.assertEqual(text, "0x0403:0x6001, 0x10C4")
+        self.assertEqual(parse_controllers_text(text), controllers)
+        self.assertEqual(
+            parse_controllers_text(format_controllers_text(parse_controllers_text("0403:6001, 10C4"))),
+            controllers,
+        )
+        self.assertEqual(format_controllers_text([]), "")
+        self.assertEqual(format_controllers_text(None), "")
+        self.assertEqual(
+            controllers_field_text({"controllers": controllers}),
+            "0x0403:0x6001, 0x10C4",
+        )
+        self.assertEqual(controllers_field_text({"controllers": []}), "")
+        self.assertEqual(
+            controllers_field_text({"vendor_ids": ["0x10C4"]}),
+            "0x10C4",
+        )
 
 
 class DeviceColumnTests(unittest.TestCase):

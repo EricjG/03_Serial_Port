@@ -80,7 +80,7 @@ Each item under `"devices"` describes how to find one piece of equipment. Old fi
 
 - `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
 - `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115.2K Baud` (first listed baud). `long_description` is not in that dropdown.
-- `controllers` — USB-serial chips this device may sit behind. `vid` / `pid` are hex strings (`"0x10C4"`). If `pid` is omitted, any product ID from that vendor matches.
+- `controllers` — USB-serial chips this device may sit behind (one or more `{vid, pid?}` pairs). `vid` / `pid` are hex strings (`"0x10C4"`). Scan Devices and Identify only try that device on ports whose VID matches, and whose PID matches when the controller lists one. If `pid` is omitted on a controller, any product ID from that vendor matches. If `controllers` is missing, empty, null, or has no usable `vid` values, the device is tried on **every** available port. The Device dropdown lists the full catalog (it is not filtered by the open port). The device editor **Port VID:PID** field is comma-separated hex (`0403:6001, 10C4`); PID is optional; `0x` is optional; blank saves `[]`.
 - `serial_parameters.baud_rates` — baud values tried in order (bps) when identifying the device. The picker's Baud **dropdown** is **not** this list; it comes from `serial_ports.json` as described above. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
 - `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped.
 - `response.regex` — pattern that must appear in the reply. Named groups like `(?P<revision>...)` are allowed.
