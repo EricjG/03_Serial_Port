@@ -57,6 +57,7 @@ from picker_logic import (
     format_baud_label,
     format_serial_frame,
     format_settings_text,
+    SETTINGS_DIALOG_FIELDS,
     format_vid_pid,
     format_port_scan_header,
     format_scan_usb_id,
@@ -125,6 +126,8 @@ UI_TREE_COL_WIDTHS = {
     "ID/Baud": 110,
 }
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
+BAUD_COMBO_CHARS = 8
+BAUD_COMBO_WIDTH_SCALE = 1.5
 # Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
 PICKER_COMBOBOX_ARROWSIZE = UI_CONTROL_H // 2
 # White arrow chrome so clam/default 3-D edges do not draw an inner box.
@@ -420,6 +423,45 @@ class SerialPortApp:
             width = 48
         wrap.configure(width=width, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
+        return width
+
+    @staticmethod
+    def scaled_baud_width_px(base_width, scale=BAUD_COMBO_WIDTH_SCALE):
+        try:
+            base_width = int(base_width)
+        except (TypeError, ValueError):
+            base_width = 0
+        return max(base_width, int(round(base_width * float(scale))))
+
+    def _resize_outlined_combo(self, wrap, inner, pixel_width):
+        """Force wrap to pixel_width and shrink inner char width so text is not clipped."""
+        width = max(int(pixel_width), 48)
+        wrap.configure(width=width, height=UI_CONTROL_H)
+        wrap.pack_propagate(False)
+        avg = max(self._widget_font(inner).measure("0"), 1)
+        highlight = self._tk_px(wrap.cget("highlightthickness"))
+        inner_px = max(avg * 4, width - 2 * highlight - 4)
+        inner.configure(width=max(4, inner_px // avg))
+
+    def _trade_port_for_baud_width(self, port_wrap, port_combo, baud_wrap):
+        """Widen Baud 1.5x; steal the same pixels from Port so Open stays put."""
+        try:
+            port_wrap.update_idletasks()
+            baud_wrap.update_idletasks()
+            old_baud = int(baud_wrap.winfo_reqwidth() or baud_wrap.cget("width") or 0)
+            old_port = int(port_wrap.winfo_reqwidth() or port_wrap.cget("width") or 0)
+        except tk.TclError:
+            return
+        if old_baud <= 0 or old_port <= 0:
+            return
+        new_baud = self.scaled_baud_width_px(old_baud)
+        delta = new_baud - old_baud
+        new_port = max(48, old_port - delta)
+        self._baud_wrap_base_w = old_baud
+        self._port_wrap_base_w = old_port
+        baud_wrap.configure(width=new_baud, height=UI_CONTROL_H)
+        baud_wrap.pack_propagate(False)
+        self._resize_outlined_combo(port_wrap, port_combo, new_port)
 
     def _outlined_combo(self, parent, var, values, width, editable=False, bg="#FFFFFF"):
         wrap = self._outline_box(parent, bg=bg)
@@ -850,6 +892,7 @@ class SerialPortApp:
             editable=True,
         )
         port_wrap.pack(fill=tk.X)
+        self._port_combo_wrap = port_wrap
         self.settings_port_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._sync_port_selection_ui()
         )
@@ -864,10 +907,12 @@ class SerialPortApp:
             baud_col,
             self.settings_baud_var,
             self._baud_labels_for_device(None),
-            8,
+            BAUD_COMBO_CHARS,
             editable=True,
         )
         baud_wrap.pack(anchor="w")
+        self._baud_combo_wrap = baud_wrap
+        self._trade_port_for_baud_width(port_wrap, self.settings_port_combo, baud_wrap)
         self.settings_baud_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._mark_port_status_unknown()
         )
@@ -1872,6 +1917,7 @@ class SerialPortApp:
                 data_var.get(), stop_var.get(), parity_var.get(), flow_var.get()
             )
         )
+        self._settings_preview_var = preview_var
         applied_var = tk.StringVar(value=self._format_settings_summary())
 
         def sync_preview(*_args):
@@ -1937,18 +1983,22 @@ class SerialPortApp:
             return cell
 
         choices = self._settings_choices_for_current_port()
-        labeled_combo(white, "Data Bits", data_var, choices["data_bits"]).grid(
-            row=0, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Stop Bits", stop_var, choices["stop_bits"]).grid(
-            row=0, column=1, sticky="nw", pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Parity", parity_var, choices["parity"]).grid(
-            row=1, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Flow", flow_var, choices["flow_control"]).grid(
-            row=1, column=1, sticky="nw", pady=(0, UI_GAP)
-        )
+        vars_by_key = {
+            "data_bits": data_var,
+            "parity": parity_var,
+            "stop_bits": stop_var,
+            "flow_control": flow_var,
+        }
+        field_cells = []
+        for index, (label, key) in enumerate(SETTINGS_DIALOG_FIELDS):
+            row, col = divmod(index, 2)
+            padx = (0, UI_GROUP_GAP) if col == 0 else (0, 0)
+            cell = labeled_combo(white, label, vars_by_key[key], choices[key])
+            cell.grid(
+                row=row, column=col, sticky="nw", padx=padx, pady=(0, UI_GAP)
+            )
+            field_cells.append((label, cell))
+        self._settings_dialog_fields = field_cells
 
         preview_width = self._chars_for_text(longest_settings_text(), extra_px=8)
 

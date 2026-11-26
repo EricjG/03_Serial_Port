@@ -25,6 +25,7 @@ from picker_logic import (
     format_identify_reply_preview,
     format_port_scan_header,
     format_scan_usb_id,
+    format_flow_summary,
     format_serial_frame,
     identify_attempt_message,
     identify_attempt_result,
@@ -42,6 +43,7 @@ from picker_logic import (
     status_value_width_px,
     format_baud_label,
     format_settings_text,
+    SETTINGS_DIALOG_FIELDS,
     format_vid_pid,
     identified_device_message,
     identify_failure_label,
@@ -116,25 +118,46 @@ class HexVidPidTests(unittest.TestCase):
 
 
 class SettingsTextTests(unittest.TestCase):
-    def test_order_is_data_stop_parity_flow(self):
+    def test_frame_then_flow_uses_serial_frame_helper(self):
         self.assertEqual(
             format_settings_text("8", "1", "None", "None"),
-            "8 - 1 - None - None",
+            "8N1 - No Flow",
         )
         self.assertEqual(
-            format_settings_text("7", "2", "Even", FLOW_XOFF_XON),
-            "7 - 2 - Even - xOff/xOn",
+            format_settings_text("7", "1", "Even", "RTS/CTS"),
+            "7E1 - RTS/CTS",
+        )
+        self.assertEqual(
+            format_settings_text("8", "2", "None", FLOW_XOFF_XON),
+            "8N2 - XON/XOFF",
         )
         self.assertEqual(
             format_settings_text("8", "1", "Space", "RTS/CTS"),
-            "8 - 1 - Space - RTS/CTS",
+            "8S1 - RTS/CTS",
         )
+        self.assertEqual(
+            format_settings_text("8", "1", "N", "None"),
+            f"{format_serial_frame(8, 'N', 1)} - No Flow",
+        )
+
+    def test_flow_summary_labels(self):
+        self.assertEqual(format_flow_summary("None"), "No Flow")
+        self.assertEqual(format_flow_summary(None), "No Flow")
+        self.assertEqual(format_flow_summary("RTS/CTS"), "RTS/CTS")
+        self.assertEqual(format_flow_summary(FLOW_XOFF_XON), "XON/XOFF")
+        self.assertEqual(format_flow_summary("XON/XOFF"), "XON/XOFF")
 
     def test_default_parity_is_none(self):
         self.assertEqual(DEFAULT_PARITY, "None")
         self.assertEqual(
             format_settings_text("8", "1", DEFAULT_PARITY, "None"),
-            "8 - 1 - None - None",
+            "8N1 - No Flow",
+        )
+
+    def test_dialog_fields_are_data_parity_stop_flow(self):
+        self.assertEqual(
+            [label for label, _key in SETTINGS_DIALOG_FIELDS],
+            ["Data Bits", "Parity", "Stop Bits", "Flow"],
         )
 
 
@@ -573,10 +596,12 @@ class SlideOptionListTests(unittest.TestCase):
         self.assertEqual(normalize_flow_choice("DSR/DTR"), "None")
         self.assertEqual(normalize_flow_choice(None), "None")
 
-    def test_longest_settings_fits_space_and_xoff_xon(self):
+    def test_longest_settings_fits_xon_xoff(self):
         longest = longest_settings_text()
-        self.assertEqual(longest, "8 - 1 - Space - xOff/xOn")
-        self.assertGreaterEqual(len(longest), len("8 - 1 - Space - RTS/CTS"))
+        self.assertEqual(longest, "8N1 - XON/XOFF")
+        self.assertGreaterEqual(len(longest), len("8S2 - XON/XOFF"))
+        self.assertGreaterEqual(len(longest), len("8N1 - RTS/CTS"))
+        self.assertGreaterEqual(len(longest), len("8N1 - No Flow"))
 
     def test_device_dropdown_uses_slide_format(self):
         mb607 = {
@@ -609,6 +634,8 @@ class LayoutTokenTests(unittest.TestCase):
         sys.modules.setdefault("serial.tools", MagicMock())
         sys.modules.setdefault("serial.tools.list_ports", MagicMock())
         from serial_port_app import (
+            BAUD_COMBO_CHARS,
+            BAUD_COMBO_WIDTH_SCALE,
             LONGEST_PORT_SAMPLE,
             PICKER_COMBOBOX_ARROWSIZE,
             PICKER_COMBOBOX_STYLE,
@@ -643,6 +670,9 @@ class LayoutTokenTests(unittest.TestCase):
         )
         self.assertLess(UI_TREE_COL_WIDTHS["Port #"], 170)
         self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
+        self.assertEqual(BAUD_COMBO_CHARS, 8)
+        self.assertEqual(BAUD_COMBO_WIDTH_SCALE, 1.5)
+        self.assertEqual(int(round(80 * BAUD_COMBO_WIDTH_SCALE)), 120)
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
         self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
@@ -777,14 +807,14 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             identified_device=None,
             fail_count=3,
             fail_key=("SIMCom", "SIM7080"),
         )
         self.assertEqual(result["baud"], "115.2K")
-        self.assertEqual(result["settings"], "8 - 1 - None - None")
+        self.assertEqual(result["settings"], "8N1 - No Flow")
         self.assertEqual(result["port_status"], "Opened")
         self.assertEqual(result["device_status"], DEVICE_STATUS_UNIDENTIFIED)
         self.assertEqual(result["fail_count"], 0)
@@ -799,21 +829,21 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             mode=MODE_MANUAL,
         )
         self.assertFalse(result["apply_baud"])
         self.assertFalse(result["apply_settings"])
         self.assertEqual(result["baud"], "115.2K")
-        self.assertEqual(result["settings"], "8 - 1 - None - None")
+        self.assertEqual(result["settings"], "8N1 - No Flow")
 
     def test_automatic_mode_may_apply_device_settings(self):
         result = apply_device_pick(
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             mode=MODE_AUTOMATIC,
         )
@@ -828,7 +858,7 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("MUX Wiring", "MB607"),
             self.mb607,
             baud="9600",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             fail_count=2,
             fail_key=("MUX Wiring", "MB607"),

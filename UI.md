@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.9 — Identified Device Status matches the Connected Device column; Port Status shows port / baud / frame (Nov 26, 2026).
+Version: 3.10 — Settings as `8N1 - No Flow`; Baud 1.5× (stolen from Port); dialog Data/Parity/Stop/Flow (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -54,12 +54,12 @@ Version: 3.9 — Identified Device Status matches the Connected Device column; P
 - Panels, white boxes, and the Open/Identify column share one right edge; labels and controls share one left edge
 
 ### White box 1
-- One row: **Port** combo (wide enough for `/tmp/serialdemo/ttyUSB0`), **Baud** (~8 chars), **Settings**, **Open** at the right
+- One row: **Port** combo (sized from `/tmp/serialdemo/ttyUSB0`, then shortened by the Baud grow), **Baud** (1.5× the old 8-char width), **Settings**, **Open** at the right. Port shrinks by the same pixel amount Baud grows, so the row width and Open stay put.
 - 16px between those groups
 - **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected port's `serial_ports.json` chip `baud_rates` (or `STANDARD_BAUD_RATES` clipped to that chip's `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port (no VID/PID match) uses the standard baud list (no 600). Selecting a device does not shrink this list. The user may still type a rate. Do not add a divider.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
-- **Settings**: read-only field with the same 1px outline, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); width is computed from the longest legal string (`8 - 1 - Space - xOff/xOn`); click opens the dialog
+- **Settings**: read-only field with the same 1px outline, default `8N1 - No Flow` (data/parity/stop shorthand from the same helper as Port Status, then flow: **No Flow** / **RTS/CTS** / **XON/XOFF**). Width is computed from the longest legal string (`8N1 - XON/XOFF`); click opens the dialog
 - **Open** is one 96px button with three states (no port path in the label):
   - `Open` when the port is free
   - `Close` when this app has it open (click closes it)
@@ -99,17 +99,17 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Open by **click** on the main **Settings** value
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
-- Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified. Baud’s unknown-port fallback is also `STANDARD_BAUD_RATES`, but a **matched chip** drives the Baud list (see White box 1). Data/Stop/Parity/Flow still ignore the chip catalog when no device is identified; an identified device’s own `serial_parameters` lists win when present:
+- Defaults: Data Bits 8, Parity None, Stop Bits 1, Flow None
+- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified. Baud’s unknown-port fallback is also `STANDARD_BAUD_RATES`, but a **matched chip** drives the Baud list (see White box 1). Data/Parity/Stop/Flow still ignore the chip catalog when no device is identified; an identified device’s own `serial_parameters` lists win when present:
   - Data: 8, 7, 6, 5
-  - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space
+  - Stop: 1, 2
   - Flow: None, RTS/CTS, xOff/xOn
-- White inner box, labels above controls:
-  - **Data Bits** / **Stop Bits** / **Parity** / **Flow** dropdowns
-  - Green readonly box = live draft (Data - Stop - Parity - Flow); **Select** (96px) to the right
+- White inner box, labels above controls, 2×2 reading order:
+  - **Data Bits** / **Parity** on the first row, **Stop Bits** / **Flow** on the second
+  - Green readonly box = live draft (`8N1 - No Flow`, same helper as the main Settings field); **Select** (96px) to the right
 - Below white box, still in blue: cream readonly current applied settings + **Exit** (96px)
-- Preview lines are sized from the longest legal settings string
+- Preview lines are sized from the longest legal settings string (`8N1 - XON/XOFF`)
 - **Select** applies values, updates main Settings, sets Port Status to **Unknown**, closes
 - **Exit** / window X closes without applying
 - Enter = Select, Escape = Exit

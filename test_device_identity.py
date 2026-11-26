@@ -1216,7 +1216,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_baud_var = MagicMock()
         app.settings_baud_var.get.return_value = "115.2K"
         app.settings_summary_var = MagicMock()
-        app.settings_summary_var.get.return_value = "8 - 1 - None - None"
+        app.settings_summary_var.get.return_value = "8N1 - No Flow"
         app.settings_data_var = MagicMock()
         app.settings_data_var.get.return_value = "8"
         app.settings_stop_var = MagicMock()

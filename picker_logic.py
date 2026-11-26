@@ -40,6 +40,24 @@ STANDARD_SETTINGS_CHOICES = {
     "parity": PARITY_CHOICES,
     "flow_control": FLOW_CHOICES,
 }
+# Settings dialog 2×2 reading order: Data, Parity, Stop, Flow.
+SETTINGS_DIALOG_FIELDS = (
+    ("Data Bits", "data_bits"),
+    ("Parity", "parity"),
+    ("Stop Bits", "stop_bits"),
+    ("Flow", "flow_control"),
+)
+FLOW_SUMMARY_NONE = "No Flow"
+FLOW_SUMMARY_XON_XOFF = "XON/XOFF"
+_FLOW_SUMMARY_LABELS = {
+    "None": FLOW_SUMMARY_NONE,
+    "NO FLOW": FLOW_SUMMARY_NONE,
+    FLOW_SUMMARY_NONE: FLOW_SUMMARY_NONE,
+    "RTS/CTS": "RTS/CTS",
+    FLOW_XOFF_XON: FLOW_SUMMARY_XON_XOFF,
+    "XON/XOFF": FLOW_SUMMARY_XON_XOFF,
+    "XOFF/XON": FLOW_SUMMARY_XON_XOFF,
+}
 
 PORT_STATUS_CLOSED = "Closed"
 PORT_STATUS_OPENED = "Opened"
@@ -116,9 +134,24 @@ def unique_labeled_items(items, label_of):
     return list(zip(labels, items))
 
 
+def format_flow_summary(flow):
+    """Settings-line flow: No Flow, RTS/CTS, XON/XOFF."""
+    text = "" if flow is None else str(flow).strip()
+    if not text:
+        return FLOW_SUMMARY_NONE
+    mapped = _FLOW_SUMMARY_LABELS.get(text) or _FLOW_SUMMARY_LABELS.get(text.upper())
+    if mapped:
+        return mapped
+    alias = FLOW_ALIASES.get(text) or FLOW_ALIASES.get(text.upper())
+    if alias:
+        return _FLOW_SUMMARY_LABELS.get(alias, FLOW_SUMMARY_XON_XOFF)
+    return FLOW_SUMMARY_NONE
+
+
 def format_settings_text(data, stop, parity, flow):
-    """Data - Stop - Parity - Flow, e.g. 8 - 1 - None - None."""
-    return f"{data} - {stop} - {parity} - {flow}"
+    """8N1 - No Flow. Frame is format_serial_frame; then flow summary."""
+    frame = format_serial_frame(data, parity, stop)
+    return f"{frame} - {format_flow_summary(flow)}"
 
 
 MODE_MANUAL = "manual"
@@ -398,7 +431,7 @@ def longest_settings_text(
     parity_choices=PARITY_CHOICES,
     flow_choices=FLOW_CHOICES,
 ):
-    """Longest Data - Stop - Parity - Flow string from the legal lists."""
+    """Longest `8N1 - No Flow` string from the legal lists."""
     longest = ""
     for data, stop, parity, flow in product(
         data_choices, stop_choices, parity_choices, flow_choices
