@@ -54,11 +54,29 @@ The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Conn
 
 Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
 
-**Select** prints a JSON preview of the current selection to stdout, then quits. **Exit** (and the window X) prints `{"result": null}`. Run from a terminal (`run.bat`) so you can see that JSON.
+**Select** prints JSON of the open-port specs plus the identified device, then quits. The object has only `port`, `baud`, `data_bits`, `stop_bits`, `parity`, `flow_control`, and `device`. `device` is `{manufacturer, model, short_description}` after Identify/Scan confirms a device, or `null` if none was identified. If no port is chosen, `"port"` is `null` and the window stays open. **Exit** (and the window X) still prints `{"result": null}`. Run from a terminal (`run.bat`) so you can see that JSON.
+
+Example after identifying a SIM7080 on COM3:
+
+```json
+{
+  "port": "COM3",
+  "baud": 115200,
+  "data_bits": 8,
+  "stop_bits": 1,
+  "parity": "None",
+  "flow_control": "None",
+  "device": {
+    "manufacturer": "SIMCom",
+    "model": "SIM7080",
+    "short_description": ""
+  }
+}
+```
 
 ## devices.json fields
 
-Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted. Do not strip `type` / `short_description` / `long_description` from this file; identify templates still use them. When filling the Select payload, prefer a `devices_info.json` match and fall back to these fields.
+Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted. Do not strip `type` / `short_description` / `long_description` from this file; identify templates still use them. The Select JSON `device` block uses only `manufacturer`, `model`, and `short_description` (prefer a `devices_info.json` match, then these fields).
 
 - `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
 - `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115.2K Baud` (first listed baud). `long_description` is not in that dropdown.

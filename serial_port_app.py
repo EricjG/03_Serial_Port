@@ -111,8 +111,10 @@ UI_TREE_COL_WIDTHS = {
     "ID/Baud": 110,
 }
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
-# ttk Combobox still paints its own border; force it off so only the wrap's
-# 1px #A0A0A0 outline is visible (same as Settings / status entries).
+# Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
+PICKER_COMBOBOX_ARROWSIZE = UI_CONTROL_H // 2
+# White arrow chrome so clam/default 3-D edges do not draw an inner box.
+# The wrap Frame is the only 1px #A0A0A0 outline (same as Settings / status).
 PICKER_COMBOBOX_STYLE = {
     "relief": "flat",
     "borderwidth": 0,
@@ -120,7 +122,116 @@ PICKER_COMBOBOX_STYLE = {
     "darkcolor": "#FFFFFF",
     "bordercolor": "#FFFFFF",
     "focuscolor": "#FFFFFF",
+    "background": "#FFFFFF",
+    "arrowsize": PICKER_COMBOBOX_ARROWSIZE,
 }
+# Theme-neutral parts (cloned from clam/default). Do not use the current
+# theme's Combobox.downarrow / Combobox.field — on Windows vista those are
+# a boxed drop button and a bordered field, which double the wrap outline.
+PICKER_COMBOBOX_LAYOUT = [
+    (
+        "Picker.Combobox.field",
+        {
+            "sticky": "nswe",
+            "children": [
+                (
+                    "Picker.Combobox.downarrow",
+                    {"side": "right", "sticky": "ns"},
+                ),
+                (
+                    "Picker.Combobox.padding",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Picker.Combobox.textarea", {"sticky": "nswe"}),
+                        ],
+                    },
+                ),
+            ],
+        },
+    )
+]
+_PICKER_COMBOBOX_CLONE_THEMES = ("clam", "default")
+_PICKER_COMBOBOX_ELEMENTS = (
+    ("Picker.Combobox.downarrow", "Combobox.downarrow"),
+    ("Picker.Combobox.field", "Combobox.field"),
+    ("Picker.Combobox.padding", "Combobox.padding"),
+    ("Picker.Combobox.textarea", "Combobox.textarea"),
+)
+
+
+def picker_combobox_layout_element_names(layout=None):
+    """Flatten a ttk style.layout() tree to element names (exact, not substrings)."""
+    if layout is None:
+        layout = PICKER_COMBOBOX_LAYOUT
+    names = []
+    for spec in layout:
+        name = spec[0]
+        opts = spec[1] if len(spec) > 1 else {}
+        names.append(name)
+        children = (opts or {}).get("children") or ()
+        names.extend(picker_combobox_layout_element_names(children))
+    return names
+
+
+def _clone_ttk_element(style, dest_name, source_name, themes=_PICKER_COMBOBOX_CLONE_THEMES):
+    """Copy a clam/default element into the current theme under dest_name."""
+    for theme in themes:
+        try:
+            style.element_create(dest_name, "from", theme, source_name)
+            return True
+        except tk.TclError as err:
+            if "duplicate" in str(err).lower():
+                return True
+    return False
+
+
+def configure_picker_combobox_style(style, font=None):
+    """Picker.TCombobox: cloned flat arrow + borderless field; wrap is the outline."""
+    for dest_name, source_name in _PICKER_COMBOBOX_ELEMENTS:
+        _clone_ttk_element(style, dest_name, source_name)
+    kwargs = {
+        "font": font,
+        "fieldbackground": "#FFFFFF",
+        "foreground": UI_FG,
+        "padding": 1,
+        **PICKER_COMBOBOX_STYLE,
+    }
+    if font is None:
+        kwargs.pop("font", None)
+    try:
+        style.configure("Picker.TCombobox", **kwargs)
+    except tk.TclError:
+        try:
+            style.configure("Picker.TCombobox", **PICKER_COMBOBOX_STYLE)
+        except tk.TclError:
+            pass
+    try:
+        style.layout("Picker.TCombobox", PICKER_COMBOBOX_LAYOUT)
+    except tk.TclError:
+        pass
+    style.map(
+        "Picker.TCombobox",
+        foreground=[("disabled", UI_DISABLED)],
+        fieldbackground=[("disabled", "#F0F0F0"), ("readonly", "#FFFFFF")],
+        arrowcolor=[("disabled", UI_DISABLED)],
+    )
+    try:
+        style.map(
+            "Picker.TCombobox",
+            lightcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            darkcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            bordercolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            background=[
+                ("disabled", "#F0F0F0"),
+                ("readonly", "#FFFFFF"),
+                ("!disabled", "#FFFFFF"),
+            ],
+        )
+    except tk.TclError:
+        pass
+
+
 UI_FONT_CANDIDATES = ("Segoe UI", "Noto Sans", "DejaVu Sans", "Arial")
 UI_FONT_SIZE = 9
 
@@ -189,62 +300,12 @@ class SerialPortApp:
             "Treeview.Heading", font=self._font_label, foreground="#000000"
         )
         style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        style.configure(
-            "Picker.TCombobox",
-            font=self._font_control,
-            fieldbackground="#FFFFFF",
-            background="#FFFFFF",
-            foreground=UI_FG,
-            relief=tk.FLAT,
-            borderwidth=0,
-            padding=1,
-        )
-        try:
-            style.configure("Picker.TCombobox", **PICKER_COMBOBOX_STYLE)
-        except tk.TclError:
-            pass
-        try:
-            # Drop Combobox.field so the wrap's 1px outline is the only border.
-            style.layout(
-                "Picker.TCombobox",
-                [
-                    (
-                        "Combobox.padding",
-                        {
-                            "sticky": "nswe",
-                            "children": [
-                                (
-                                    "Combobox.downarrow",
-                                    {"side": "right", "sticky": "ns"},
-                                ),
-                                ("Combobox.textarea", {"sticky": "nswe"}),
-                            ],
-                        },
-                    )
-                ],
-            )
-        except tk.TclError:
-            pass
+        configure_picker_combobox_style(style, font=self._font_control)
         style.map(
             "Treeview",
             background=[("selected", UI_ROW_SELECTED)],
             foreground=[("selected", "#000000")],
         )
-        style.map(
-            "Picker.TCombobox",
-            foreground=[("disabled", UI_DISABLED)],
-            fieldbackground=[("disabled", "#F0F0F0"), ("readonly", "#FFFFFF")],
-            arrowcolor=[("disabled", UI_DISABLED)],
-        )
-        try:
-            style.map(
-                "Picker.TCombobox",
-                lightcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-                darkcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-                bordercolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-            )
-        except tk.TclError:
-            pass
 
         self.show_in_use_var = tk.BooleanVar(value=False)
         self.auto_port_scan_var = tk.BooleanVar(value=True)
@@ -1484,22 +1545,15 @@ class SerialPortApp:
     def _select_handoff_payload(self):
         port = self._selected_port() if hasattr(self, "_selected_port") else None
         baud = None
-        settings = None
         data_bits = None
         stop_bits = None
         parity = None
         flow_control = None
-        port_status = None
-        device_status = None
         try:
             if getattr(self, "settings_baud_var", None) is not None:
                 baud = self._parse_baud(self.settings_baud_var.get())
         except (TypeError, ValueError):
             baud = None
-        if getattr(self, "settings_summary_var", None) is not None:
-            settings = self.settings_summary_var.get() or None
-        elif hasattr(self, "_format_settings_summary"):
-            settings = self._format_settings_summary()
         try:
             if getattr(self, "settings_data_var", None) is not None:
                 data_bits = int(float(self.settings_data_var.get() or 8))
@@ -1517,55 +1571,21 @@ class SerialPortApp:
             parity = self.settings_parity_var.get() or None
         if getattr(self, "settings_flow_var", None) is not None:
             flow_control = self.settings_flow_var.get() or None
-        if port:
-            port_status = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(
-                port
-            )
-            if port_status is None and getattr(self, "port_status_var", None) is not None:
-                port_status = self.port_status_var.get()
-        elif getattr(self, "port_status_var", None) is not None:
-            port_status = self.port_status_var.get()
-        selected = None
-        if getattr(self, "settings_device_var", None) is not None:
-            selected = self._device_for_label(self.settings_device_var.get())
         identified = None
         if port:
             identified = (getattr(self, "_identified_device_by_port", None) or {}).get(
                 port
             )
-        device_status = identified_device_message(
-            identified,
-            selected,
-            fail_count=getattr(self, "_identify_fail_count", 0),
-            fail_key=getattr(self, "_identify_fail_key", None),
-        )
-        if getattr(self, "device_status_var", None) is not None:
-            shown = self.device_status_var.get()
-            if shown:
-                device_status = shown
-        info = self._device_attributes_for(selected or identified)
-        hardware = self._port_hardware_for(port)
-        device_column = ""
-        if port:
-            row = self._port_row(port) if hasattr(self, "_port_row") else None
-            if row and row[0] == "Identified" and row[3]:
-                device_column = row[3]
-        if not device_column:
-            device_column = getattr(self, "_matched_device_column", "") or ""
-        identity = device_identity_fields(info, selected or identified, device_column)
+        info = self._device_attributes_for(identified) if identified else None
+        identity = device_identity_fields(info, identified) if identified else None
         return select_handoff_payload(
             port=port,
             baud=baud,
-            settings=settings,
             data_bits=data_bits,
             stop_bits=stop_bits,
             parity=parity,
             flow_control=flow_control,
-            port_status=port_status,
-            device_status=device_status,
             device=identity,
-            port_hardware=hardware,
-            device_attributes=info,
         )
 
     def _on_connection_scan_device(self):

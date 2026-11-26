@@ -464,6 +464,7 @@ class LayoutTokenTests(unittest.TestCase):
         sys.modules.setdefault("serial.tools.list_ports", MagicMock())
         from serial_port_app import (
             LONGEST_PORT_SAMPLE,
+            PICKER_COMBOBOX_ARROWSIZE,
             PICKER_COMBOBOX_STYLE,
             UI_BTN_W,
             UI_CONTROL_H,
@@ -477,6 +478,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_TREE_COL_WIDTHS,
             UI_TREE_PORT_SAMPLE,
             UI_TREE_ROWS,
+            picker_combobox_layout_element_names,
         )
 
         self.assertEqual(UI_PAD, 8)
@@ -498,6 +500,19 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
         self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["background"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["bordercolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["lightcolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["darkcolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_ARROWSIZE, UI_CONTROL_H // 2)
+        self.assertEqual(PICKER_COMBOBOX_STYLE["arrowsize"], PICKER_COMBOBOX_ARROWSIZE)
+        names = picker_combobox_layout_element_names()
+        self.assertNotIn("Combobox.downarrow", names)
+        self.assertNotIn("Combobox.field", names)
+        self.assertNotIn("Combobox.rightdownarrow", names)
+        self.assertIn("Picker.Combobox.downarrow", names)
+        self.assertIn("Picker.Combobox.field", names)
+        self.assertIn("Picker.Combobox.textarea", names)
         self.assertEqual(grid_ceil_px(1, 8), 8)
         self.assertEqual(grid_ceil_px(64, 8), 64)
         self.assertEqual(grid_ceil_px(65, 8), 72)
@@ -640,59 +655,69 @@ class HandoffPayloadTests(unittest.TestCase):
             '{\n  "result": null\n}',
         )
 
-    def test_select_shape_prefers_null_over_dropping_keys(self):
+    def test_select_shape_is_open_specs_plus_device_or_null(self):
         payload = select_handoff_payload()
-        self.assertEqual(payload["result"], "select")
-        for key in (
-            "port",
-            "baud",
+        self.assertEqual(
+            set(payload),
+            {
+                "port",
+                "baud",
+                "data_bits",
+                "stop_bits",
+                "parity",
+                "flow_control",
+                "device",
+            },
+        )
+        for dropped in (
+            "result",
             "settings",
-            "data_bits",
-            "stop_bits",
-            "parity",
-            "flow_control",
             "port_status",
             "device_status",
-            "device",
             "port_hardware",
             "device_attributes",
         ):
-            self.assertIn(key, payload)
+            self.assertNotIn(dropped, payload)
         self.assertIsNone(payload["port"])
-        self.assertIsNone(payload["port_hardware"])
-        self.assertIsNone(payload["device_attributes"])
-        self.assertEqual(payload["device"]["manufacturer"], "")
-        self.assertEqual(payload["device"]["device_column"], "")
+        self.assertIsNone(payload["device"])
 
-    def test_select_includes_hardware_and_attributes_when_matched(self):
+    def test_select_identified_device_keeps_only_name_fields(self):
         payload = select_handoff_payload(
             port="COM3",
             baud=115200,
-            settings="8 - 1 - None - None",
             data_bits=8,
             stop_bits=1,
             parity="None",
             flow_control="None",
-            port_status="Opened",
-            device_status="Identified",
             device={
-                "manufacturer": "MUX Wiring",
-                "model": "MB607",
-                "type": "Body Control Module",
-                "short_description": "Body Control Module",
-                "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
-                "device_column": "Revision 1.0 01/01/26",
+                "manufacturer": "SIMCom",
+                "model": "SIM7080",
+                "type": "Cellular Module",
+                "short_description": "",
+                "long_description": "ignored",
+                "device_column": "ignored",
             },
-            port_hardware={"manufacturer": "FTDI", "model": "FT232R/RL/RQ", "vid": "0x0403"},
-            device_attributes={"manufacturer": "MUX Wiring", "model": "MB607"},
         )
-        self.assertEqual(payload["result"], "select")
-        self.assertEqual(payload["port"], "COM3")
-        self.assertEqual(payload["baud"], 115200)
-        self.assertEqual(payload["flow_control"], "None")
-        self.assertEqual(payload["device"]["model"], "MB607")
-        self.assertEqual(payload["port_hardware"]["vid"], "0x0403")
-        self.assertEqual(payload["device_attributes"]["model"], "MB607")
+        self.assertEqual(
+            payload,
+            {
+                "port": "COM3",
+                "baud": 115200,
+                "data_bits": 8,
+                "stop_bits": 1,
+                "parity": "None",
+                "flow_control": "None",
+                "device": {
+                    "manufacturer": "SIMCom",
+                    "model": "SIM7080",
+                    "short_description": "",
+                },
+            },
+        )
+        self.assertEqual(
+            set(payload["device"]),
+            {"manufacturer", "model", "short_description"},
+        )
 
 
 if __name__ == "__main__":
