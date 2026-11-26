@@ -1,7 +1,19 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+import tkinter.font as tkfont
 import json
 import os
+
+from device_data import controllers_field_text, parse_controllers_text
+
+# Theme - Serial Port Apps (Iris): this field only.
+UI_FG = "#1a1a1a"
+UI_OUTLINE = "#A0A0A0"
+UI_CONTROL_H = 24
+UI_FONT_CANDIDATES = ("Segoe UI", "Noto Sans", "DejaVu Sans", "Arial")
+UI_FONT_SIZE = 9
+PORT_VID_PID_LABEL = "Port VID:PID"
+
 
 class DeviceEditorApp:
     def __init__(self, root, json_file):
@@ -10,6 +22,7 @@ class DeviceEditorApp:
         self.root.geometry("480x600")
         self.root.iconbitmap("1871658-200.png")  # todo: Need to find a ICO file in order for this to work.
         self.json_file = json_file
+        self._init_fonts()
 
         # Create a scrollable frame for device details
         main_frame = tk.Frame(root)
@@ -72,6 +85,19 @@ class DeviceEditorApp:
             self.device_dropdown.set("")  # Clear the dropdown if no devices are available
             messagebox.showinfo("Info", "No devices available to load.")
 
+    def _init_fonts(self):
+        """Segoe UI 9, same fallbacks as the picker."""
+        try:
+            available = set(tkfont.families())
+        except (tk.TclError, TypeError, ValueError):
+            available = set()
+        family = next(
+            (name for name in UI_FONT_CANDIDATES if name in available),
+            "TkDefaultFont",
+        )
+        self._font_control = (family, UI_FONT_SIZE)
+        self._font_label = (family, UI_FONT_SIZE, "bold")
+
     def load_devices(self):
         """Load devices from the JSON file."""
         if not os.path.exists(self.json_file):
@@ -94,13 +120,40 @@ class DeviceEditorApp:
             "Bytesize": [5, 6, 7, 8]
         }
 
-        # Create fields for Vendor IDs
+        # Port VID:PID — comma-separated hex, PID optional (theme: 24px, 1px #A0A0A0)
         vendor_frame = tk.Frame(self.details_frame)
-        vendor_frame.pack(fill=tk.X, pady=7)  # Reduced pady by 30%
-        tk.Label(vendor_frame, text="Vendor IDs", width=10, anchor="w").pack(side=tk.LEFT, padx=2)  # Title text
-        vendor_entry = tk.Entry(vendor_frame, width=10)  # Make the text box shorter
-        vendor_entry.pack(side=tk.LEFT, padx=2)  # Align text box closer to the title
-        self.fields["Vendor IDs"] = vendor_entry
+        vendor_frame.pack(fill=tk.X, pady=7)
+        tk.Label(
+            vendor_frame,
+            text=PORT_VID_PID_LABEL,
+            anchor="w",
+            font=self._font_label,
+            fg=UI_FG,
+        ).pack(side=tk.LEFT, padx=2)
+        wrap = tk.Frame(
+            vendor_frame,
+            bg="#FFFFFF",
+            highlightbackground=UI_OUTLINE,
+            highlightthickness=1,
+            highlightcolor=UI_OUTLINE,
+            bd=0,
+            relief=tk.FLAT,
+            height=UI_CONTROL_H,
+        )
+        wrap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        wrap.pack_propagate(False)
+        vendor_entry = tk.Entry(
+            wrap,
+            font=self._font_control,
+            width=32,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            fg=UI_FG,
+            background="#FFFFFF",
+        )
+        vendor_entry.pack(fill=tk.BOTH, expand=True, padx=4, pady=0)
+        self.fields[PORT_VID_PID_LABEL] = vendor_entry
 
         # Create a single row for Manufacturer and Model text boxes
         general_frame = tk.Frame(self.details_frame)
@@ -171,9 +224,9 @@ class DeviceEditorApp:
         self.fields["Manufacturer"].insert(0, device.get("manufacturer", ""))
         self.fields["Model"].delete(0, tk.END)
         self.fields["Model"].insert(0, device.get("model", ""))
-        if "Vendor IDs" in self.fields:
-            self.fields["Vendor IDs"].delete(0, tk.END)
-            self.fields["Vendor IDs"].insert(0, ",".join(device.get("vendor_ids", [])))
+        if PORT_VID_PID_LABEL in self.fields:
+            self.fields[PORT_VID_PID_LABEL].delete(0, tk.END)
+            self.fields[PORT_VID_PID_LABEL].insert(0, controllers_field_text(device))
         if "Baudrate" in self.fields:
             self.fields["Baudrate"].set(device.get("serial_parameters", {}).get("baudrate", ""))
         if "Parity" in self.fields:
@@ -207,7 +260,10 @@ class DeviceEditorApp:
         device = self.devices[selected_index]
         device["manufacturer"] = self.fields["Manufacturer"].get()
         device["model"] = self.fields["Model"].get()
-        device["vendor_ids"] = self.fields["Vendor IDs"].get().split(",")
+        device["controllers"] = parse_controllers_text(
+            self.fields[PORT_VID_PID_LABEL].get()
+        )
+        device.pop("vendor_ids", None)
         device["serial_parameters"]["baudrate"] = int(self.fields["Baudrate"].get())
         device["serial_parameters"]["parity"] = self.fields["Parity"].get()
         device["serial_parameters"]["stopbits"] = float(self.fields["Stopbits"].get())
@@ -223,7 +279,7 @@ class DeviceEditorApp:
     def new_device(self):
         """Create a new device."""
         new_device = {
-            "vendor_ids": [],
+            "controllers": [],
             "manufacturer": "",
             "model": "",
             "serial_parameters": {

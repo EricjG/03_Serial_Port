@@ -1066,12 +1066,22 @@ class SerialPortApp:
         self._open_port_settings_dialog()
 
     def _rebuild_device_entries(self):
+        """Full catalog. Scan/Identify apply device_matches_ids per port; no dropdown filter."""
         devices = self.device_definitions.get("devices", [])
         bases = []
         for item in devices:
             baud = default_baud(item)
             bases.append(picker_device_label(item, self.format_baud(baud)) or "device")
         self._device_entries = list(zip(unique_device_labels(bases), devices))
+
+    def _port_ids_for_match(self, port):
+        """VID:PID string from the port list row, or None."""
+        row = self._port_row(port) if port and hasattr(self, "port_data") else None
+        return row[2] if row else None
+
+    def _device_allowed_on_port(self, device, port):
+        """Identify/Scan: try this device on this port (empty IDs match every port)."""
+        return device_matches_ids(device, self._port_ids_for_match(port))
 
     def _uart_ic_for_selected_port(self):
         """serial_ports.json chip for the Port dropdown VID/PID, or None."""
@@ -1634,14 +1644,17 @@ class SerialPortApp:
         self._log(f"Device scan {port} for {label}...")
         found = None
         try:
-            with serial.Serial(port, timeout=2, **settings) as ser:
-                match = self._probe_match(ser, device)
-                if match:
-                    found = format_device_column(device, match.groupdict())
-            if found:
-                self._log_cont(f"  {port}  FOUND  {found}")
+            if not self._device_allowed_on_port(device, port):
+                self._log_cont(f"  {port}  skipped (port ID does not match device)")
             else:
-                self._log_cont(f"  {port}  NOT FOUND")
+                with serial.Serial(port, timeout=2, **settings) as ser:
+                    match = self._probe_match(ser, device)
+                    if match:
+                        found = format_device_column(device, match.groupdict())
+                if found:
+                    self._log_cont(f"  {port}  FOUND  {found}")
+                else:
+                    self._log_cont(f"  {port}  NOT FOUND")
             self._log_cont("Device scan Done")
         except (serial.SerialException, OSError, ValueError) as exc:
             self._log_cont(f"Device scan failed: {exc}")

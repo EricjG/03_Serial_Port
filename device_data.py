@@ -185,19 +185,102 @@ def default_baud(device):
     return rates[0] if rates else None
 
 
+def _usable_controllers(device):
+    """(vid_int, pid_int_or_None) for each controllers entry that has a vid."""
+    usable = []
+    for controller in (device or {}).get("controllers") or []:
+        if not isinstance(controller, dict):
+            continue
+        cvid = parse_usb_id(controller.get("vid"))
+        if cvid is None:
+            continue
+        cpid = parse_usb_id(controller.get("pid"))
+        usable.append((cvid, cpid))
+    return usable
+
+
 def device_matches_ids(device, vid, pid=None):
-    """True if any controller's VID matches, and PID matches when the controller lists one."""
+    """True if this device should be tried on a port with this VID/PID.
+
+    A device with no usable controllers (missing, empty, null, or every
+    entry lacks vid) matches every port. Otherwise any listed controller
+    may match: VID required, PID optional on the controller.
+    """
+    controllers = _usable_controllers(device)
+    if not controllers:
+        return True
     port_vid, port_pid = parse_vid_pid(vid, pid)
     if port_vid is None:
         return False
-    for controller in device.get("controllers") or []:
-        cvid = parse_usb_id((controller or {}).get("vid"))
-        if cvid is None or cvid != port_vid:
+    for cvid, cpid in controllers:
+        if cvid != port_vid:
             continue
-        cpid = parse_usb_id((controller or {}).get("pid"))
         if cpid is None or port_pid is None or cpid == port_pid:
             return True
     return False
+
+
+def _parse_hex_id_token(text):
+    """USB ID as int from hex with or without 0x (editor field tokens)."""
+    if text is None:
+        return None
+    token = str(text).strip()
+    if not token or token.lower() == "unknown":
+        return None
+    try:
+        return int(token, 16)
+    except ValueError:
+        return None
+
+
+def parse_controllers_text(text):
+    """Parse '0403:6001, 10C4' into controllers [{'vid': '0x0403', 'pid': '0x6001'}, ...].
+
+    Comma-separated entries. PID is optional. Hex with or without 0x.
+    Blank or whitespace is []. Invalid tokens are skipped.
+    """
+    if text is None:
+        return []
+    entries = []
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            left, right = part.split(":", 1)
+            vid = _parse_hex_id_token(left)
+            pid = _parse_hex_id_token(right)
+        else:
+            vid = _parse_hex_id_token(part)
+            pid = None
+        if vid is None:
+            continue
+        entry = {"vid": format_usb_id(vid)}
+        if pid is not None:
+            formatted_pid = format_usb_id(pid)
+            if formatted_pid is not None:
+                entry["pid"] = formatted_pid
+        entries.append(entry)
+    return entries
+
+
+def format_controllers_text(controllers):
+    """controllers list -> '0x0403:0x6001, 0x10C4'. Blank if none."""
+    parts = []
+    for item in controllers or []:
+        if not isinstance(item, dict):
+            continue
+        vid = format_usb_id(item.get("vid"))
+        if vid is None:
+            continue
+        pid = format_usb_id(item.get("pid"))
+        parts.append(f"{vid}:{pid}" if pid else vid)
+    return ", ".join(parts)
+
+
+def controllers_field_text(device):
+    """Editor Port VID:PID value from controllers (or old vendor_ids)."""
+    return format_controllers_text(_migrate_controllers(device or {}))
 
 
 def command_steps(device):
@@ -256,9 +339,10 @@ def _pause_ms_from_command(command):
 
 
 def _migrate_controllers(device):
+    """Keep an explicit controllers list, including []. Old files use vendor_ids."""
     controllers = device.get("controllers")
-    migrated = []
     if isinstance(controllers, list):
+        migrated = []
         for item in controllers:
             if not isinstance(item, dict):
                 continue
@@ -270,8 +354,8 @@ def _migrate_controllers(device):
             if pid is not None:
                 entry["pid"] = pid
             migrated.append(entry)
-        if migrated:
-            return migrated
+        return migrated
+    migrated = []
     vendor_ids = device.get("vendor_ids") or []
     product_ids = device.get("product_ids") or []
     pids = [format_usb_id(pid) for pid in product_ids]
