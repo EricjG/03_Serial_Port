@@ -7,7 +7,7 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 - Section blue: `#D6E8F8`, black 1px outline
 - White inner boxes: white fill, flat 1px `#A0A0A0` outline
 - Buttons: gray `#C0C0C0`, same 1px `#A0A0A0` outline
-- **One** outer border: orange `#FF8C00`
+- **One** outer border: orange `#FF8C00`, 3px (padding is white inside it, not extra orange)
 - Control outline (entries, combos, read-only fields): flat 1px `#A0A0A0` (no sunken / raised)
 - Disabled text: `#808080` (no hover)
 - Selected list row: yellow `#FFFF00`, dark text
@@ -113,4 +113,5 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Enter = Select, Escape = Exit
 
 ## Window
-- Minimum size is large enough that the title strip, Automated list (6 rows), Manually boxes, status row, and Select/Exit stay on screen
+- Default size fits the content: 3px orange frame, then 8px padding on every edge (including the bottom). No extra empty band below Port Status / Select / Exit
+- Minimum size is that content size, so the title strip, Automated list (6 rows), Manually boxes, status row, and Select/Exit stay on screen

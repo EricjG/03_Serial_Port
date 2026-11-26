@@ -79,6 +79,7 @@ UI_GROUP_GAP = 16
 UI_CONTROL_H = 24
 UI_BTN_W = 96
 UI_TITLE_H = 28
+UI_ORANGE_BORDER = 3
 UI_OUTLINE = "#A0A0A0"
 UI_TREE_ROWS = 6
 UI_TREE_CELL_PAD = 2
@@ -96,8 +97,6 @@ class SerialPortApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Serial Port Application v{APP_VERSION}")
-        self.root.geometry("780x560")
-        self.root.minsize(740, 500)
         self.root.configure(bg=UI_BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_exit)
 
@@ -178,9 +177,11 @@ class SerialPortApp:
         self._build_ui()
         self.root.update_idletasks()
         self._size_settings_summary()
-        req_w = max(740, self.root.winfo_reqwidth())
-        req_h = max(500, self.root.winfo_reqheight())
+        self.root.update_idletasks()
+        req_w = self.root.winfo_reqwidth()
+        req_h = self.root.winfo_reqheight()
         self.root.minsize(req_w, req_h)
+        self.root.geometry(f"{req_w}x{req_h}")
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
@@ -338,12 +339,14 @@ class SerialPortApp:
         return col, wrap, button
 
     def _build_ui(self):
-        # One orange border around the whole UI; 8px padding inside it.
-        shell = tk.Frame(self.root, bg=UI_ORANGE, padx=3, pady=3)
+        # 3px orange frame; 8px white padding lives on the inner frame, not the shell.
+        shell = tk.Frame(
+            self.root, bg=UI_ORANGE, padx=UI_ORANGE_BORDER, pady=UI_ORANGE_BORDER
+        )
         shell.pack(fill=tk.BOTH, expand=True)
 
-        main = tk.Frame(shell, bg=UI_BG)
-        main.pack(fill=tk.BOTH, expand=True, padx=UI_PAD, pady=UI_PAD)
+        main = tk.Frame(shell, bg=UI_BG, padx=UI_PAD, pady=UI_PAD)
+        main.pack(fill=tk.BOTH, expand=True)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=0)
         main.rowconfigure(1, weight=0)
@@ -1300,10 +1303,12 @@ class SerialPortApp:
 
         win.protocol("WM_DELETE_WINDOW", close_dialog)
 
-        shell = tk.Frame(win, bg=UI_ORANGE, padx=3, pady=3)
+        shell = tk.Frame(
+            win, bg=UI_ORANGE, padx=UI_ORANGE_BORDER, pady=UI_ORANGE_BORDER
+        )
         shell.pack(fill=tk.BOTH, expand=True)
-        inner = tk.Frame(shell, bg=UI_BG)
-        inner.pack(fill=tk.BOTH, expand=True, padx=UI_PAD, pady=UI_PAD)
+        inner = tk.Frame(shell, bg=UI_BG, padx=UI_PAD, pady=UI_PAD)
+        inner.pack(fill=tk.BOTH, expand=True)
 
         blue = self._blue_box(inner)
         blue.pack(fill=tk.BOTH, expand=True)

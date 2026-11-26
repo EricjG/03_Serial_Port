@@ -410,6 +410,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_CONTROL_H,
             UI_GAP,
             UI_GROUP_GAP,
+            UI_ORANGE_BORDER,
             UI_OUTLINE,
             UI_PAD,
             UI_TITLE_H,
@@ -424,6 +425,7 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_CONTROL_H, 24)
         self.assertEqual(UI_BTN_W, 96)
         self.assertEqual(UI_TITLE_H, 28)
+        self.assertEqual(UI_ORANGE_BORDER, 3)
         self.assertEqual(UI_OUTLINE, "#A0A0A0")
         self.assertEqual(UI_TREE_ROWS, 6)
         self.assertEqual(UI_TREE_CELL_PAD, 2)
