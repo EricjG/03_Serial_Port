@@ -443,13 +443,23 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         slept.assert_any_call(2.0)
 
 
+def _standard_baud_labels():
+    return [
+        SerialPortApp.format_baud(baud) or str(baud)
+        for baud in STANDARD_BAUD_RATES
+    ]
+
+
 class BaudDropdownTests(unittest.TestCase):
-    def test_device_baud_list_is_short_labels(self):
+    def test_unknown_port_uses_standard_baud_labels(self):
         app = _bare_app()
-        device = _device_by_model("MB607")
-        self.assertEqual(app._baud_labels_for_device(device), ["460.8K", "115.2K"])
-        self.assertEqual(app._baud_labels_for_device(_device_by_model("SIM7080")), ["115.2K"])
-        standard = app._baud_labels_for_device(None)
+        standard = _standard_baud_labels()
+        self.assertEqual(app._baud_labels_for_device(None), standard)
+        self.assertEqual(
+            app._baud_labels_for_device(_device_by_model("SIM7080")),
+            standard,
+        )
+        self.assertEqual(app._baud_labels_for_device(_device_by_model("MB607")), standard)
         self.assertEqual(standard[0], "300")
         self.assertNotIn("600", standard)
         self.assertIn("115.2K", standard)
@@ -509,7 +519,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_flow_var.set.assert_not_called()
         app._mark_port_status_unknown.assert_not_called()
         app._refresh_settings_summary.assert_not_called()
-        app._refresh_baud_dropdown.assert_called()
+        app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=True)
         self.assertEqual(app._identify_fail_count, 0)
         app.device_status_var.set.assert_called_with("Unidentified")
 
@@ -605,22 +615,77 @@ class DevicePickAndHandoffTests(unittest.TestCase):
     def test_unknown_port_without_device_uses_standard_baud_dropdown(self):
         app = _bare_app()
         labels = app._baud_labels_for_device(None, uart_ic=None)
-        expected = [
-            SerialPortApp.format_baud(baud) or str(baud)
-            for baud in STANDARD_BAUD_RATES
-        ]
+        expected = _standard_baud_labels()
         self.assertEqual(labels, expected)
         self.assertNotIn("600", labels)
-        chip = {"serial_parameters": {"baud_rates": [9600]}}
-        self.assertEqual(app._baud_labels_for_device(None, uart_ic=chip), expected)
 
-    def test_selected_device_baud_list_wins_on_unknown_port(self):
+    def test_known_chip_baud_list_is_used_even_when_a_device_is_selected(self):
         app = _bare_app()
         device = _device_by_model("MB607")
+        chip = {"serial_parameters": {"baud_rates": [9600, 115200, 460800]}}
+        self.assertEqual(
+            app._baud_labels_for_device(device, uart_ic=chip),
+            ["9.6K", "115.2K", "460.8K"],
+        )
+        self.assertEqual(
+            app._baud_labels_for_device(None, uart_ic=chip),
+            ["9.6K", "115.2K", "460.8K"],
+        )
         self.assertEqual(
             app._baud_labels_for_device(device, uart_ic=None),
-            ["460.8K", "115.2K"],
+            _standard_baud_labels(),
         )
+
+    def test_refresh_preselects_device_baud_when_it_is_in_the_chip_list(self):
+        app = _bare_app()
+        device = _device_by_model("MB607")
+        combo = {}
+        baud_var = MagicMock()
+        app.settings_baud_combo = combo
+        app.settings_baud_var = baud_var
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.port_data = [
+            ("Available", "COM3", "0x0403:0x6001", None, "FTDI", None)
+        ]
+        app.serial_ports, error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
+        self.assertIsNone(error)
+        app._log = MagicMock()
+
+        app._refresh_baud_dropdown(device, apply_default=True)
+
+        expected = _standard_baud_labels()
+        self.assertEqual(combo["values"], expected)
+        baud_var.set.assert_called_with("460.8K")
+        app._log.assert_not_called()
+
+    def test_refresh_keeps_chip_list_and_logs_when_device_baud_is_missing(self):
+        app = _bare_app()
+        device = {
+            "manufacturer": "Odd",
+            "model": "Box",
+            "serial_parameters": {"baud_rates": [50]},
+        }
+        combo = {}
+        baud_var = MagicMock()
+        app.settings_baud_combo = combo
+        app.settings_baud_var = baud_var
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM99"
+        app.port_data = [
+            ("Available", "COM99", "0x1234:0x5678", None, "unknown chip", None)
+        ]
+        app.serial_ports, error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
+        self.assertIsNone(error)
+        app._log = MagicMock()
+
+        app._refresh_baud_dropdown(device, apply_default=True)
+
+        self.assertEqual(combo["values"], _standard_baud_labels())
+        baud_var.set.assert_not_called()
+        app._log.assert_called()
+        self.assertIn("50", app._log.call_args[0][0])
+        self.assertIn("leaving Baud unchanged", app._log.call_args[0][0])
 
     def test_unknown_port_without_identified_device_uses_slide_settings(self):
         app = _bare_app()

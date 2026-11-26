@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.3 — Device pick, Identify failures, single outlines, serial_ports / devices_info (Nov 26, 2026).
+Version: 3.4 — Baud list from serial_ports.json (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -56,7 +56,7 @@ Version: 3.3 — Device pick, Identify failures, single outlines, serial_ports /
 ### White box 1
 - One row: **Port** combo (wide enough for `/tmp/serialdemo/ttyUSB0`), **Baud** (~8 chars), **Settings**, **Open** at the right
 - 16px between those groups
-- **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected device's `baud_rates`; if that list is missing, the standard baud list is used (no 600). The user may still type a rate. Do not add a divider or the full standard list under the device rates.
+- **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected port's `serial_ports.json` chip `baud_rates` (or `STANDARD_BAUD_RATES` clipped to that chip's `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port (no VID/PID match) uses the standard baud list (no 600). Selecting a device does not shrink this list. The user may still type a rate. Do not add a divider.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
 - **Settings**: read-only field with the same 1px outline, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); width is computed from the longest legal string (`8 - 1 - Space - xOff/xOn`); click opens the dialog
@@ -69,7 +69,7 @@ Version: 3.3 — Device pick, Identify failures, single outlines, serial_ports /
 - One row: **Device** combo stretching across, **Identify** at the right
 - Identify is 96px, same width as Open, right edges aligned
 - **Device** dropdown format: `Manufacturer  model  115.2K Baud` (two spaces between fields; baud is that device's first listed rate). Labels stay unique: a second copy of the same name gets ` (2)`
-- Picking a Device changes **only Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Baud, Settings, or Port Status. The Baud *list* may refresh to that device's rates; the currently shown baud stays even if it is not in the new list
+- Picking a Device changes **Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Settings or Port Status. The Baud *list* stays the chip/standard list (it does not shrink to the device's rates). If the device's first baud is already in that list, Baud preselects it; if not, the list is unchanged, nothing is added, Baud stays as shown, and a note is logged
 - **Identify** probes only the device shown in the Device dropdown, using the current settings. Enabled only when this app has the port open. Identify failure does not change Port Status
 - **Select** prints a JSON handoff object to stdout (indented), closes the open port, then quits. If no port is chosen, it prints JSON with `"port": null` and stays open
 - **Exit** and the window X print `{"result": null}`, close the open port, then quit
@@ -100,7 +100,7 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
 - Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified (same fallback as Baud → `STANDARD_BAUD_RATES`). An identified device’s own `serial_parameters` lists win when present; chip catalog lists do not replace these:
+- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified. Baud’s unknown-port fallback is also `STANDARD_BAUD_RATES`, but a **matched chip** drives the Baud list (see White box 1). Data/Stop/Parity/Flow still ignore the chip catalog when no device is identified; an identified device’s own `serial_parameters` lists win when present:
   - Data: 8, 7, 6, 5
   - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space

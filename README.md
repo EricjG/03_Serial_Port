@@ -50,7 +50,9 @@ Three JSON files sit in this folder (a later change will move them to a shared d
 
 A missing or invalid file shows a message and does not crash. If `devices.json` already has an error on Device Status, later file errors are logged and the app stays usable with a null match.
 
-The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
+The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). The **Baud** dropdown is also driven by that file: a port whose VID/PID matches a chip lists that chip's `serial_parameters.baud_rates` (or `STANDARD_BAUD_RATES` clipped to `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port uses the standard baud list (no 600). Selecting a device does not shrink the Baud list; it only preselects the device's first baud when that rate is already in the list.
+
+Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
 
 **Select** prints a JSON preview of the current selection to stdout, then quits. **Exit** (and the window X) prints `{"result": null}`. Run from a terminal (`run.bat`) so you can see that JSON.
 
@@ -61,7 +63,7 @@ Each item under `"devices"` describes how to find one piece of equipment. Old fi
 - `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
 - `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115.2K Baud` (first listed baud). `long_description` is not in that dropdown.
 - `controllers` — USB-serial chips this device may sit behind. `vid` / `pid` are hex strings (`"0x10C4"`). If `pid` is omitted, any product ID from that vendor matches.
-- `serial_parameters.baud_rates` — baud values tried in order (bps). The picker's Baud dropdown shows this list; if it is missing, the standard baud list is used. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
+- `serial_parameters.baud_rates` — baud values tried in order (bps) when identifying the device. The picker's Baud **dropdown** is **not** this list; it comes from `serial_ports.json` as described above. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
 - `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped.
 - `response.regex` — pattern that must appear in the reply. Named groups like `(?P<revision>...)` are allowed.
 - `response.device_column` — text for an identified row, filled from regex groups and device fields (for example `Revision {revision}`).

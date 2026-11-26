@@ -131,14 +131,52 @@ def baud_rates_for_device(device):
     return list(rates) if rates else list(STANDARD_BAUD_RATES)
 
 
-def baud_rates_for_picker(device=None, uart_ic=None):
-    """Baud dropdown: selected device rates win; otherwise STANDARD_BAUD_RATES.
+def _standard_baud_rates_in_range(min_baud, max_baud):
+    """STANDARD_BAUD_RATES inside min_baud..max_baud (inclusive). None bound = open."""
+    rates = []
+    for baud in STANDARD_BAUD_RATES:
+        if min_baud is not None and baud < min_baud:
+            continue
+        if max_baud is not None and baud > max_baud:
+            continue
+        rates.append(baud)
+    return rates
 
-    serial_ports.json is not used. An unknown port (no VID/PID match) with no
-    device selected/identified stays on the UI-slide standard list (no 600).
+
+def _chip_baud_rates(uart_ic):
+    """serial_ports.json chip Baud list, or STANDARD_BAUD_RATES in min_baud..max_baud."""
+    params = (uart_ic or {}).get("serial_parameters") or {}
+    rates = []
+    seen = set()
+    for item in params.get("baud_rates") or []:
+        baud = _as_int(item)
+        if baud is None or baud <= 0 or baud in seen:
+            continue
+        seen.add(baud)
+        rates.append(baud)
+    if rates:
+        return rates
+    return _standard_baud_rates_in_range(
+        _as_int(params.get("min_baud")),
+        _as_int(params.get("max_baud")),
+    )
+
+
+def baud_rates_for_picker(device=None, uart_ic=None):
+    """Baud dropdown: serial_ports.json chip rates; else STANDARD_BAUD_RATES.
+
+    If the selected port matches a serial_ports.json chip (VID/PID), use that
+    chip's serial_parameters.baud_rates. If baud_rates is missing/empty, use
+    STANDARD_BAUD_RATES filtered to the chip's min_baud..max_baud (inclusive).
+    An unknown port (no VID/PID match) stays on the UI-slide standard list
+    (no 600). A selected device does not shrink this list; it only preselects
+    its first baud when that rate is already in the list.
     """
-    if device:
-        return baud_rates_for_device(device)
+    _ = device
+    if uart_ic:
+        rates = _chip_baud_rates(uart_ic)
+        if rates:
+            return rates
     return list(STANDARD_BAUD_RATES)
 
 
