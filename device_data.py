@@ -709,12 +709,13 @@ def uart_ic_label(ic):
 
 
 def identified_connected_label(info, device, device_column=None):
-    """Identified-row Connected Device text.
+    """Identified-row Connected Device / Device Status text.
 
-    Prefer manufacturer + model + short_description from devices_info.json
-    (falling back field-by-field to devices.json). If there is no short
-    description, keep the existing identify device_column so Scan/Identify
-    results are not lost.
+    One helper so the table column and the bottom Device Status field cannot
+    drift. Prefer manufacturer + model + short_description from
+    devices_info.json (falling back field-by-field to devices.json). If there
+    is no short description, keep the existing identify device_column so
+    Scan/Identify results are not lost.
     """
     manufacturer = (prefer_info_field(info, device, "manufacturer") or "").strip()
     model = (prefer_info_field(info, device, "model") or "").strip()
@@ -725,6 +726,35 @@ def identified_connected_label(info, device, device_column=None):
     if column:
         return column
     return " ".join(part for part in (manufacturer, model) if part) or None
+
+
+def catalog_device_list(payload):
+    if isinstance(payload, dict):
+        return payload.get("devices") or []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def catalog_identified_labels(devices_payload, info_payload):
+    """Identified labels the current devices.json + devices_info.json can show."""
+    devices = catalog_device_list(devices_payload)
+    infos = devices_info_list(info_payload)
+    labels = []
+    seen = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        info = match_device_info(
+            infos, device.get("manufacturer"), device.get("model")
+        )
+        column = format_device_column(device)
+        label = identified_connected_label(info, device, column)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return tuple(labels)
 
 
 def device_identity_fields(info, device, device_column=""):

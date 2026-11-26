@@ -18,10 +18,14 @@ from picker_logic import (
     MODE_MANUAL,
     apply_device_pick,
     apply_header_button_click,
+    bottom_port_status_fields_from_device,
+    bottom_port_status_fields_from_serial_settings,
+    bottom_port_status_text,
     format_identify_error,
     format_identify_reply_preview,
     format_port_scan_header,
     format_scan_usb_id,
+    format_flow_summary,
     format_serial_frame,
     identify_attempt_message,
     identify_attempt_result,
@@ -39,6 +43,7 @@ from picker_logic import (
     status_value_width_px,
     format_baud_label,
     format_settings_text,
+    SETTINGS_DIALOG_FIELDS,
     format_vid_pid,
     identified_device_message,
     identify_failure_label,
@@ -49,6 +54,7 @@ from picker_logic import (
     picker_control_state,
     picker_device_label,
     port_event_message,
+    port_status_size_samples,
     port_status_text,
     record_identify_failure,
     record_identify_success,
@@ -112,25 +118,46 @@ class HexVidPidTests(unittest.TestCase):
 
 
 class SettingsTextTests(unittest.TestCase):
-    def test_order_is_data_stop_parity_flow(self):
+    def test_frame_then_flow_uses_serial_frame_helper(self):
         self.assertEqual(
             format_settings_text("8", "1", "None", "None"),
-            "8 - 1 - None - None",
+            "8N1 - No Flow",
         )
         self.assertEqual(
-            format_settings_text("7", "2", "Even", FLOW_XOFF_XON),
-            "7 - 2 - Even - xOff/xOn",
+            format_settings_text("7", "1", "Even", "RTS/CTS"),
+            "7E1 - RTS/CTS",
+        )
+        self.assertEqual(
+            format_settings_text("8", "2", "None", FLOW_XOFF_XON),
+            "8N2 - XON/XOFF",
         )
         self.assertEqual(
             format_settings_text("8", "1", "Space", "RTS/CTS"),
-            "8 - 1 - Space - RTS/CTS",
+            "8S1 - RTS/CTS",
         )
+        self.assertEqual(
+            format_settings_text("8", "1", "N", "None"),
+            f"{format_serial_frame(8, 'N', 1)} - No Flow",
+        )
+
+    def test_flow_summary_labels(self):
+        self.assertEqual(format_flow_summary("None"), "No Flow")
+        self.assertEqual(format_flow_summary(None), "No Flow")
+        self.assertEqual(format_flow_summary("RTS/CTS"), "RTS/CTS")
+        self.assertEqual(format_flow_summary(FLOW_XOFF_XON), "XON/XOFF")
+        self.assertEqual(format_flow_summary("XON/XOFF"), "XON/XOFF")
 
     def test_default_parity_is_none(self):
         self.assertEqual(DEFAULT_PARITY, "None")
         self.assertEqual(
             format_settings_text("8", "1", DEFAULT_PARITY, "None"),
-            "8 - 1 - None - None",
+            "8N1 - No Flow",
+        )
+
+    def test_dialog_fields_are_data_parity_stop_flow(self):
+        self.assertEqual(
+            [label for label, _key in SETTINGS_DIALOG_FIELDS],
+            ["Data Bits", "Parity", "Stop Bits", "Flow"],
         )
 
 
@@ -147,6 +174,90 @@ class NaturalPortSortTests(unittest.TestCase):
         self.assertEqual(
             sorted(ports, key=natural_port_sort_key),
             ["/dev/ttyUSB2", "/dev/ttyUSB10"],
+        )
+
+
+class BottomPortStatusTextTests(unittest.TestCase):
+    def test_click_shows_just_the_port(self):
+        self.assertEqual(bottom_port_status_text("COM8"), "COM8")
+        self.assertEqual(bottom_port_status_text("COM8", "selected"), "COM8")
+        self.assertEqual(bottom_port_status_text("COM256", "closed"), "COM256")
+        self.assertEqual(bottom_port_status_text(None), "")
+        self.assertEqual(bottom_port_status_text("No Ports Available"), "")
+
+    def test_identified_and_opened_use_short_baud_and_frame(self):
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "identified", baud=115200, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 115.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=460800, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 460.8K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=300, data_bits=8, parity="E", stop_bits=1
+            ),
+            "COM8 300 8E1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "identified", baud=1200, data_bits=8, parity="None", stop_bits=1
+            ),
+            "COM8 1.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=9600, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 9.6K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=19200, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 19.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=921600, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 921.6K 8N1",
+        )
+
+    def test_open_failure_label(self):
+        self.assertEqual(
+            bottom_port_status_text("COM8", "failed"),
+            "COM8 - Failed to open",
+        )
+        self.assertEqual(
+            bottom_port_status_text("COM256", "Failed"),
+            "COM256 - Failed to open",
+        )
+
+    def test_fields_helpers_feed_the_same_formatter(self):
+        opened = bottom_port_status_fields_from_serial_settings(
+            {"baudrate": 115200, "bytesize": 8, "parity": "N", "stopbits": 1}
+        )
+        self.assertEqual(
+            bottom_port_status_text("COM8", "opened", **opened),
+            "COM8 115.2K 8N1",
+        )
+        device = {
+            "serial_parameters": {
+                "data_bits": 8,
+                "parity": "None",
+                "stop_bits": 1,
+            }
+        }
+        identified = bottom_port_status_fields_from_device(device, baud=460800)
+        self.assertEqual(
+            bottom_port_status_text("COM8", "identified", **identified),
+            "COM8 460.8K 8N1",
         )
 
 
@@ -214,6 +325,14 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
             identified_device_message(self.sim, self.sim),
             DEVICE_STATUS_IDENTIFIED,
         )
+        self.assertEqual(
+            identified_device_message(
+                self.mb607,
+                self.mb607,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            "MUX Wiring MB607 Body Control Module",
+        )
 
     def test_device_status_is_unidentified_until_confirmed(self):
         self.assertEqual(UNKNOWN_DEVICE_MESSAGE, DEVICE_STATUS_UNIDENTIFIED)
@@ -224,6 +343,22 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         self.assertEqual(
             device_status_text(self.mb607, self.mb607),
             DEVICE_STATUS_IDENTIFIED,
+        )
+        self.assertEqual(
+            device_status_text(
+                self.mb607,
+                self.mb607,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            "MUX Wiring MB607 Body Control Module",
+        )
+        self.assertEqual(
+            device_status_text(
+                self.mb607,
+                self.sim,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            DEVICE_STATUS_UNIDENTIFIED,
         )
 
     def test_identity_key_is_manufacturer_and_model(self):
@@ -461,10 +596,12 @@ class SlideOptionListTests(unittest.TestCase):
         self.assertEqual(normalize_flow_choice("DSR/DTR"), "None")
         self.assertEqual(normalize_flow_choice(None), "None")
 
-    def test_longest_settings_fits_space_and_xoff_xon(self):
+    def test_longest_settings_fits_xon_xoff(self):
         longest = longest_settings_text()
-        self.assertEqual(longest, "8 - 1 - Space - xOff/xOn")
-        self.assertGreaterEqual(len(longest), len("8 - 1 - Space - RTS/CTS"))
+        self.assertEqual(longest, "8N1 - XON/XOFF")
+        self.assertGreaterEqual(len(longest), len("8S2 - XON/XOFF"))
+        self.assertGreaterEqual(len(longest), len("8N1 - RTS/CTS"))
+        self.assertGreaterEqual(len(longest), len("8N1 - No Flow"))
 
     def test_device_dropdown_uses_slide_format(self):
         mb607 = {
@@ -497,6 +634,9 @@ class LayoutTokenTests(unittest.TestCase):
         sys.modules.setdefault("serial.tools", MagicMock())
         sys.modules.setdefault("serial.tools.list_ports", MagicMock())
         from serial_port_app import (
+            BAUD_COMBO_CHARS,
+            BAUD_COMBO_WIDTH_SCALE,
+            ICON_PNG_SIZES,
             LONGEST_PORT_SAMPLE,
             PICKER_COMBOBOX_ARROWSIZE,
             PICKER_COMBOBOX_STYLE,
@@ -511,6 +651,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_TREE_CELL_PAD,
             UI_TREE_COL_WIDTHS,
             UI_TREE_PORT_SAMPLE,
+            UI_TREE_MIN_ROWS,
             UI_TREE_ROWS,
             picker_combobox_layout_element_names,
         )
@@ -524,6 +665,7 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_ORANGE_BORDER, 3)
         self.assertEqual(UI_OUTLINE, "#A0A0A0")
         self.assertEqual(UI_TREE_ROWS, 6)
+        self.assertEqual(UI_TREE_MIN_ROWS, 1)
         self.assertEqual(UI_TREE_CELL_PAD, 2)
         self.assertEqual(
             UI_TREE_COL_WIDTHS,
@@ -531,6 +673,10 @@ class LayoutTokenTests(unittest.TestCase):
         )
         self.assertLess(UI_TREE_COL_WIDTHS["Port #"], 170)
         self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
+        self.assertEqual(BAUD_COMBO_CHARS, 8)
+        self.assertEqual(BAUD_COMBO_WIDTH_SCALE, 1.5)
+        self.assertEqual(ICON_PNG_SIZES, (16, 32, 48, 256))
+        self.assertEqual(int(round(80 * BAUD_COMBO_WIDTH_SCALE)), 120)
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
         self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
@@ -577,14 +723,22 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         self.assertEqual(identify_failure_label(23), "23rd Failure")
 
     def test_status_fields_size_to_longest_visible_value(self):
-        self.assertEqual(longest_device_status_text(), "Unidentified")
+        samples = device_status_size_samples()
+        self.assertEqual(longest_device_status_text(), max(samples, key=len))
         self.assertGreaterEqual(len(longest_device_status_text()), len("Identified"))
+        self.assertGreaterEqual(len(longest_device_status_text()), len("Unidentified"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("10th Failure"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("11th Failure"))
-        self.assertEqual(longest_port_status_text(), "Unknown")
-        for word in ("Closed", "Opened", "Failed", "Unknown"):
-            self.assertLessEqual(len(word), len(longest_port_status_text()))
-        samples = device_status_size_samples()
+        self.assertEqual(
+            longest_port_status_text(),
+            max(port_status_size_samples(), key=len),
+        )
+        self.assertIn("COM256 - Failed to open", port_status_size_samples())
+        self.assertIn("COM8 115.2K 8N1", port_status_size_samples())
+        self.assertGreaterEqual(
+            len(longest_port_status_text()),
+            len("COM256 - Failed to open"),
+        )
         for word in (
             "Unidentified",
             "Identified",
@@ -592,6 +746,14 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
             "Unknown Device",
         ):
             self.assertIn(word, samples)
+
+    def test_size_samples_include_device_labels(self):
+        label = "MUX Wiring MB607 Body Control Module"
+        samples = device_status_size_samples(label)
+        self.assertIn(label, samples)
+        self.assertIn("Unidentified", samples)
+        self.assertIn("Identified", samples)
+        self.assertEqual(longest_device_status_text(label), label)
 
     def test_ordinal_helper_teen_and_twenty_cases(self):
         self.assertEqual(english_ordinal(1), "1st")
@@ -649,14 +811,14 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             identified_device=None,
             fail_count=3,
             fail_key=("SIMCom", "SIM7080"),
         )
         self.assertEqual(result["baud"], "115.2K")
-        self.assertEqual(result["settings"], "8 - 1 - None - None")
+        self.assertEqual(result["settings"], "8N1 - No Flow")
         self.assertEqual(result["port_status"], "Opened")
         self.assertEqual(result["device_status"], DEVICE_STATUS_UNIDENTIFIED)
         self.assertEqual(result["fail_count"], 0)
@@ -671,21 +833,21 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             mode=MODE_MANUAL,
         )
         self.assertFalse(result["apply_baud"])
         self.assertFalse(result["apply_settings"])
         self.assertEqual(result["baud"], "115.2K")
-        self.assertEqual(result["settings"], "8 - 1 - None - None")
+        self.assertEqual(result["settings"], "8N1 - No Flow")
 
     def test_automatic_mode_may_apply_device_settings(self):
         result = apply_device_pick(
             ("SIMCom", "SIM7080"),
             self.mb607,
             baud="115.2K",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             mode=MODE_AUTOMATIC,
         )
@@ -700,7 +862,7 @@ class DevicePickSideEffectTests(unittest.TestCase):
             ("MUX Wiring", "MB607"),
             self.mb607,
             baud="9600",
-            settings="8 - 1 - None - None",
+            settings="8N1 - No Flow",
             port_status="Opened",
             fail_count=2,
             fail_key=("MUX Wiring", "MB607"),

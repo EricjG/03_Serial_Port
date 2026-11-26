@@ -9,12 +9,15 @@ from serial.tools import list_ports  # requires pyserial package: pip install py
 import serial  # requires pyserial package: pip install pyserial
 import json
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 
 from device_data import (
     baud_rates_for_device,
     baud_rates_for_picker,
+    catalog_identified_labels,
     command_steps,
     connected_device_label,
     default_baud,
@@ -39,13 +42,16 @@ from picker_logic import (
     DEFAULT_PARITY,
     FLOW_XOFF_XON,
     MODE_MANUAL,
-    PORT_STATUS_CLOSED,
-    PORT_STATUS_FAILED,
-    PORT_STATUS_OPENED,
-    PORT_STATUS_UNKNOWN,
+    PORT_STATUS_KIND_FAILED,
+    PORT_STATUS_KIND_IDENTIFIED,
+    PORT_STATUS_KIND_OPENED,
+    PORT_STATUS_KIND_SELECTED,
     DEVICE_STATUS_UNIDENTIFIED,
     apply_device_pick,
     apply_header_button_click,
+    bottom_port_status_fields_from_device,
+    bottom_port_status_fields_from_serial_settings,
+    bottom_port_status_text,
     check_button_char_width,
     device_identity_key,
     dropdown_ports,
@@ -53,6 +59,7 @@ from picker_logic import (
     format_baud_label,
     format_serial_frame,
     format_settings_text,
+    SETTINGS_DIALOG_FIELDS,
     format_vid_pid,
     format_port_scan_header,
     format_scan_usb_id,
@@ -110,6 +117,7 @@ UI_TITLE_H = 28
 UI_ORANGE_BORDER = 3
 UI_OUTLINE = "#A0A0A0"
 UI_TREE_ROWS = 6
+UI_TREE_MIN_ROWS = 1
 UI_TREE_CELL_PAD = 2
 UI_TREE_PORT_SAMPLE = "COM99"
 # Port # sized for COM99 plus the 2px cell padding. Saved width goes to
@@ -120,7 +128,31 @@ UI_TREE_COL_WIDTHS = {
     "Port #": 64,
     "ID/Baud": 110,
 }
+APP_DIR = Path(__file__).resolve().parent
+ICON_PNG_SIZES = (16, 32, 48, 256)
+ICON_ICO_NAME = "serial_icon.ico"
+ICON_PNG_NAME = "serial_icon.png"
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
+
+
+def app_icon_png_paths(root=APP_DIR):
+    assets = Path(root) / "assets"
+    paths = []
+    for size in ICON_PNG_SIZES:
+        path = assets / f"serial_icon_{size}.png"
+        if path.is_file():
+            paths.append(path)
+    hero = assets / ICON_PNG_NAME
+    if hero.is_file() and hero not in paths:
+        paths.append(hero)
+    return tuple(paths)
+
+
+def app_icon_ico_path(root=APP_DIR):
+    path = Path(root) / "assets" / ICON_ICO_NAME
+    return path if path.is_file() else None
+BAUD_COMBO_CHARS = 8
+BAUD_COMBO_WIDTH_SCALE = 1.5
 # Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
 PICKER_COMBOBOX_ARROWSIZE = UI_CONTROL_H // 2
 # White arrow chrome so clam/default 3-D edges do not draw an inner box.
@@ -292,6 +324,8 @@ class SerialPortApp:
             self._device_entries[0][1] if self._device_entries else None
         )
 
+        self._icon_photos = []
+        self._apply_window_icon(self.root)
         self._init_fonts()
         style = ttk.Style()
         style.configure(
@@ -325,13 +359,41 @@ class SerialPortApp:
         self._size_settings_summary()
         self._size_status_fields()
         self.root.update_idletasks()
-        req_w = self.root.winfo_reqwidth()
-        req_h = self.root.winfo_reqheight()
-        self.root.minsize(req_w, req_h)
-        self.root.geometry(f"{req_w}x{req_h}")
+        self._apply_window_size_policy()
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
+    def _apply_window_icon(self, win):
+        """Replace the Tk feather with the DE-9 serial-port icon."""
+        if win is None:
+            return
+        photos = getattr(self, "_icon_photos", None)
+        if not photos:
+            photos = []
+            for path in app_icon_png_paths():
+                try:
+                    photos.append(tk.PhotoImage(file=str(path)))
+                except tk.TclError:
+                    continue
+            self._icon_photos = photos
+        if photos:
+            try:
+                win.iconphoto(True, *photos)
+            except tk.TclError:
+                try:
+                    win.iconphoto(False, photos[-1])
+                except tk.TclError:
+                    pass
+        ico = app_icon_ico_path()
+        if ico is not None and sys.platform == "win32":
+            try:
+                win.iconbitmap(default=str(ico))
+            except tk.TclError:
+                try:
+                    win.iconbitmap(str(ico))
+                except tk.TclError:
+                    pass
+
     def _init_fonts(self):
         """Segoe UI on Windows; a close sans-serif if that face is missing."""
         try:
@@ -416,6 +478,45 @@ class SerialPortApp:
             width = 48
         wrap.configure(width=width, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
+        return width
+
+    @staticmethod
+    def scaled_baud_width_px(base_width, scale=BAUD_COMBO_WIDTH_SCALE):
+        try:
+            base_width = int(base_width)
+        except (TypeError, ValueError):
+            base_width = 0
+        return max(base_width, int(round(base_width * float(scale))))
+
+    def _resize_outlined_combo(self, wrap, inner, pixel_width):
+        """Force wrap to pixel_width and shrink inner char width so text is not clipped."""
+        width = max(int(pixel_width), 48)
+        wrap.configure(width=width, height=UI_CONTROL_H)
+        wrap.pack_propagate(False)
+        avg = max(self._widget_font(inner).measure("0"), 1)
+        highlight = self._tk_px(wrap.cget("highlightthickness"))
+        inner_px = max(avg * 4, width - 2 * highlight - 4)
+        inner.configure(width=max(4, inner_px // avg))
+
+    def _trade_port_for_baud_width(self, port_wrap, port_combo, baud_wrap):
+        """Widen Baud 1.5x; steal the same pixels from Port so Open stays put."""
+        try:
+            port_wrap.update_idletasks()
+            baud_wrap.update_idletasks()
+            old_baud = int(baud_wrap.winfo_reqwidth() or baud_wrap.cget("width") or 0)
+            old_port = int(port_wrap.winfo_reqwidth() or port_wrap.cget("width") or 0)
+        except tk.TclError:
+            return
+        if old_baud <= 0 or old_port <= 0:
+            return
+        new_baud = self.scaled_baud_width_px(old_baud)
+        delta = new_baud - old_baud
+        new_port = max(48, old_port - delta)
+        self._baud_wrap_base_w = old_baud
+        self._port_wrap_base_w = old_port
+        baud_wrap.configure(width=new_baud, height=UI_CONTROL_H)
+        baud_wrap.pack_propagate(False)
+        self._resize_outlined_combo(port_wrap, port_combo, new_port)
 
     def _outlined_combo(self, parent, var, values, width, editable=False, bg="#FFFFFF"):
         wrap = self._outline_box(parent, bg=bg)
@@ -517,14 +618,16 @@ class SerialPortApp:
         main.pack(fill=tk.BOTH, expand=True)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=0)
-        main.rowconfigure(1, weight=0)
+        main.rowconfigure(1, weight=1)
         main.rowconfigure(2, weight=0)
         main.rowconfigure(3, weight=0)
+        self._main = main
 
         title_strip = self._blue_box(main, padx=UI_PAD, pady=0)
         title_strip.configure(height=UI_TITLE_H)
         title_strip.pack_propagate(False)
         title_strip.grid(row=0, column=0, sticky="ew", pady=(0, UI_GAP))
+        self._title_strip = title_strip
         tk.Label(
             title_strip,
             text="Port & Device Identification",
@@ -535,11 +638,13 @@ class SerialPortApp:
         ).pack(side=tk.LEFT, fill=tk.Y)
 
         status_box = self._blue_box(main)
-        status_box.grid(row=1, column=0, sticky="ew", pady=(0, UI_GAP))
+        status_box.grid(row=1, column=0, sticky="nsew", pady=(0, UI_GAP))
+        self._automated_box = status_box
         self._build_status_tree(status_box)
 
         settings_box = self._blue_box(main)
         settings_box.grid(row=2, column=0, sticky="ew", pady=(0, UI_GAP))
+        self._settings_box = settings_box
         self._build_port_settings_scaffold(settings_box)
 
         # Match Open/Identify inset: blue pad + white outline + white pad.
@@ -556,7 +661,9 @@ class SerialPortApp:
     def _build_status_tree(self, parent):
         """Automated box: title + check-buttons, then column titles and the port list."""
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=0)
+        parent.rowconfigure(0, weight=0)
+        parent.rowconfigure(1, weight=0)
+        parent.rowconfigure(2, weight=1, minsize=UI_CONTROL_H * UI_TREE_MIN_ROWS)
 
         header = tk.Frame(parent, bg=UI_HEADER)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, UI_GAP))
@@ -601,14 +708,17 @@ class SerialPortApp:
         self._tree_header_scroll_pad.grid(row=0, column=len(cols), sticky="ns")
 
         tree_host = self._outline_box(parent, bg="#FFFFFF")
-        tree_host.configure(height=UI_TREE_ROWS * UI_CONTROL_H)
-        tree_host.grid(row=2, column=0, sticky="ew")
+        tree_host.configure(height=UI_CONTROL_H * UI_TREE_MIN_ROWS)
+        # Host spans the old scrollbar column. Keep the scrollbar inside this
+        # propagate-false box so Windows' ~50px scrollbar reqheight cannot
+        # force a second table row at the window minimum.
+        tree_host.grid(row=2, column=0, columnspan=2, sticky="nsew")
         tree_host.pack_propagate(False)
         self.tree = ttk.Treeview(
             tree_host,
             columns=self._tree_cols,
             show="",  # titles are in blue area above
-            height=UI_TREE_ROWS,
+            height=UI_TREE_MIN_ROWS,
         )
         for name, anchor, width in cols:
             stretch = name not in UI_TREE_COL_WIDTHS
@@ -619,11 +729,10 @@ class SerialPortApp:
                 anchor=anchor,
                 stretch=stretch,
             )
-        self.tree.pack(fill=tk.BOTH, expand=True)
-
-        scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll = ttk.Scrollbar(tree_host, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
-        scroll.grid(row=2, column=1, sticky="ns")
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._tree_host = tree_host
         self._tree_scrollbar = scroll
 
@@ -635,6 +744,7 @@ class SerialPortApp:
 
         self.tree.bind("<Configure>", self._sync_tree_header_widths)
         parent.bind("<Configure>", self._sync_tree_header_widths)
+        tree_host.bind("<Configure>", self._sync_tree_visible_rows)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.root.after(50, self._apply_tree_column_widths)
@@ -656,23 +766,121 @@ class SerialPortApp:
         except tk.TclError:
             pass
 
+    def _tree_row_height(self):
+        """One Automated table row, from a live bbox when possible."""
+        tree = getattr(self, "tree", None)
+        if tree is not None:
+            try:
+                tree.update_idletasks()
+                for iid in tree.get_children():
+                    bbox = tree.bbox(iid)
+                    if bbox and bbox[3]:
+                        return max(1, int(bbox[3]))
+            except tk.TclError:
+                pass
+            try:
+                style_h = int(
+                    float(str(ttk.Style().lookup("Treeview", "rowheight") or 0))
+                )
+                if style_h:
+                    return style_h
+            except (tk.TclError, TypeError, ValueError):
+                pass
+        return UI_CONTROL_H
+
     def _fit_tree_host(self):
-        """Keep the list viewport at exactly 6 data rows, no leftover heading strip."""
+        """Keep the list viewport at least one data row. Extra height fills here."""
+        host = getattr(self, "_tree_host", None)
+        if host is None:
+            return
+        try:
+            min_h = self._one_row_table_height()
+            current = int(host.cget("height") or 0)
+            if current < min_h:
+                host.configure(height=min_h)
+            box = getattr(self, "_automated_box", None)
+            if box is not None:
+                box.rowconfigure(2, minsize=min_h, weight=1)
+            self._sync_tree_visible_rows()
+        except tk.TclError:
+            pass
+
+    def _sync_tree_visible_rows(self, event=None):
+        """Treeview row count follows the host height so extra pixels become rows."""
         host = getattr(self, "_tree_host", None)
         tree = getattr(self, "tree", None)
         if host is None or tree is None:
             return
+        if event is not None and event.widget is not host:
+            return
         try:
-            tree.update_idletasks()
-            row_h = UI_CONTROL_H
-            for iid in tree.get_children():
-                bbox = tree.bbox(iid)
-                if bbox and bbox[3]:
-                    row_h = bbox[3]
-                    break
-            host.configure(height=row_h * UI_TREE_ROWS)
-        except tk.TclError:
+            row_h = self._tree_row_height()
+            inner = max(
+                row_h, int(host.winfo_height()) - self._tree_host_outline_px()
+            )
+            rows = max(UI_TREE_MIN_ROWS, inner // row_h)
+            if int(str(tree.cget("height") or 0)) != rows:
+                tree.configure(height=rows)
+        except (tk.TclError, TypeError, ValueError):
             pass
+
+    def _tree_host_outline_px(self):
+        host = getattr(self, "_tree_host", None)
+        if host is None:
+            return 2
+        try:
+            return 2 * self._tk_px(host.cget("highlightthickness"))
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return 2
+
+    def _one_row_table_height(self):
+        """Viewport height for exactly one Automated table row, plus the outline."""
+        return self._tree_row_height() * UI_TREE_MIN_ROWS + self._tree_host_outline_px()
+
+    def _window_min_height(self):
+        """Full window height when the Automated table shows exactly one row."""
+        root = getattr(self, "root", None)
+        host = getattr(self, "_tree_host", None)
+        if root is None:
+            return UI_CONTROL_H
+        try:
+            root.update_idletasks()
+            one = self._one_row_table_height()
+            if host is None:
+                return max(one, int(root.winfo_reqheight()))
+            win_h = int(root.winfo_height() or 0)
+            host_h = int(host.winfo_height() or 0)
+            if win_h > 1 and host_h > 0:
+                return max(one, win_h - host_h + one)
+            req_h = int(root.winfo_reqheight())
+            host_req = int(host.winfo_reqheight() or host.cget("height") or 0)
+            extra = max(0, host_req - one)
+            return max(one, req_h - extra)
+        except (tk.TclError, TypeError, ValueError):
+            return UI_CONTROL_H
+
+    def _window_default_height(self):
+        row_h = self._tree_row_height()
+        extra_rows = max(0, UI_TREE_ROWS - UI_TREE_MIN_ROWS)
+        return self._window_min_height() + extra_rows * row_h
+
+    def _apply_window_size_policy(self):
+        """Default 6 table rows; min 1 row; no max; extra height goes to the table."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        try:
+            root.update_idletasks()
+            req_w = int(root.winfo_reqwidth())
+            min_w, _min_h = root.minsize()
+            width = max(int(min_w or 0), req_w)
+            min_h = self._window_min_height()
+            default_h = self._window_default_height()
+            root.minsize(width, min_h)
+            root.resizable(True, True)
+            root.geometry(f"{width}x{default_h}")
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return
 
     def _fit_fixed_tree_columns(self):
         self._apply_tree_column_widths()
@@ -846,6 +1054,7 @@ class SerialPortApp:
             editable=True,
         )
         port_wrap.pack(fill=tk.X)
+        self._port_combo_wrap = port_wrap
         self.settings_port_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._sync_port_selection_ui()
         )
@@ -860,10 +1069,12 @@ class SerialPortApp:
             baud_col,
             self.settings_baud_var,
             self._baud_labels_for_device(None),
-            8,
+            BAUD_COMBO_CHARS,
             editable=True,
         )
         baud_wrap.pack(anchor="w")
+        self._baud_combo_wrap = baud_wrap
+        self._trade_port_for_baud_width(port_wrap, self.settings_port_combo, baud_wrap)
         self.settings_baud_combo.bind(
             "<<ComboboxSelected>>", lambda _e: self._mark_port_status_unknown()
         )
@@ -1007,12 +1218,16 @@ class SerialPortApp:
         return widest
 
     def _size_outlined_status_value(self, widget, samples):
-        """Fit status samples from a temp Label's winfo_reqwidth, plus outline."""
+        """Fit status samples from a temp Label's winfo_reqwidth, plus outline.
+
+        The configured width is the minimum. Stretching Device Status may grow
+        the wrap with leftover space; it must never shrink below this.
+        """
         if widget is None:
-            return
+            return 0
         wrap = getattr(widget, "master", None)
         if wrap is None:
-            return
+            return 0
         if isinstance(samples, str):
             samples = (samples,)
         highlight = 1
@@ -1026,16 +1241,26 @@ class SerialPortApp:
         except (tk.TclError, TypeError, ValueError, AttributeError):
             wrap_w = 0
         if wrap_w <= 0:
-            return
+            return 0
         wrap.configure(width=wrap_w, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
+        return wrap_w
 
     def _pack_padx_total(self, child):
         try:
             info = child.pack_info()
         except tk.TclError:
             return 0
-        padx = info.get("padx", 0)
+        return self._padx_total(info.get("padx", 0))
+
+    def _grid_padx_total(self, child):
+        try:
+            info = child.grid_info()
+        except tk.TclError:
+            return 0
+        return self._padx_total(info.get("padx", 0))
+
+    def _padx_total(self, padx):
         if isinstance(padx, (tuple, list)):
             if len(padx) >= 2:
                 return self._tk_px(padx[0]) + self._tk_px(padx[-1])
@@ -1043,20 +1268,87 @@ class SerialPortApp:
         parts = str(padx).split()
         if len(parts) >= 2:
             return self._tk_px(parts[0]) + self._tk_px(parts[-1])
-        return 2 * self._tk_px(parts[0] if parts else 0)
+        return 2 * self._tk_px(parts[0] if padx else 0)
+
+    def _grid_row_min_width(self, master, row=0):
+        """Sum of each cell's reqwidth plus its padx (grid minsize must include padx)."""
+        total = 0
+        try:
+            slaves = master.grid_slaves(row=row)
+        except tk.TclError:
+            return 0
+        for child in slaves:
+            try:
+                total += int(child.winfo_reqwidth()) + self._grid_padx_total(child)
+            except (tk.TclError, TypeError, ValueError):
+                continue
+        return total
 
     def _grow_bottom_bar_to_status_fields(self):
-        """pack_propagate is off on the bottom row; request the children's width."""
+        """Keep Port/Device Status columns from shrinking below their font-sized min."""
         bar = getattr(self, "_bottom_bar", None)
         if bar is None:
-            return
+            return 0
         try:
             bar.update_idletasks()
-            need = 0
-            for child in bar.pack_slaves():
-                need += int(child.winfo_reqwidth()) + self._pack_padx_total(child)
-            if need > 0:
-                bar.configure(width=need, height=UI_CONTROL_H)
+            port_wrap = getattr(self, "_port_status_wrap", None)
+            device_wrap = getattr(self, "_device_status_wrap", None)
+            if port_wrap is not None:
+                bar.columnconfigure(
+                    1,
+                    minsize=int(port_wrap.winfo_reqwidth())
+                    + self._grid_padx_total(port_wrap),
+                    weight=0,
+                )
+            if device_wrap is not None:
+                bar.columnconfigure(
+                    3,
+                    minsize=int(device_wrap.winfo_reqwidth())
+                    + self._grid_padx_total(device_wrap),
+                    weight=1,
+                )
+            needed = self._grid_row_min_width(bar, 0)
+            if needed:
+                bar.configure(width=needed)
+            bar.update_idletasks()
+            return int(bar.winfo_reqwidth())
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return 0
+
+    def _catalog_identified_labels(self):
+        return catalog_identified_labels(
+            getattr(self, "device_definitions", None),
+            getattr(self, "devices_info", None),
+        )
+
+    def _device_status_size_samples(self):
+        return device_status_size_samples(*self._catalog_identified_labels())
+
+    def _raise_window_min_for_status_fields(self):
+        """If Device Status would clip, grow the window minimum instead."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        try:
+            root.update_idletasks()
+            bar = getattr(self, "_bottom_bar", None)
+            bar_w = self._grid_row_min_width(bar, 0) if bar is not None else 0
+            # Orange frame + main pad + bottom inset (aligns with Open/Identify).
+            bottom_inset = 1 + UI_PAD + 1 + UI_PAD
+            chrome = 2 * UI_ORANGE_BORDER + 2 * UI_PAD + 2 * bottom_inset
+            needed = bar_w + chrome if bar_w else 0
+            req_w = int(root.winfo_reqwidth())
+            min_w, _old_min_h = root.minsize()
+            width = max(int(min_w or 0), req_w, needed)
+            min_h = self._window_min_height()
+            root.minsize(width, min_h)
+            if int(root.winfo_width() or 0) < width:
+                height = max(
+                    int(root.winfo_height() or 0),
+                    self._window_default_height(),
+                    min_h,
+                )
+                root.geometry(f"{width}x{height}")
         except (tk.TclError, TypeError, ValueError, AttributeError):
             return
 
@@ -1065,9 +1357,11 @@ class SerialPortApp:
             getattr(self, "port_status_entry", None), port_status_size_samples()
         )
         self._size_outlined_status_value(
-            getattr(self, "device_status_entry", None), device_status_size_samples()
+            getattr(self, "device_status_entry", None),
+            self._device_status_size_samples(),
         )
         self._grow_bottom_bar_to_status_fields()
+        self._raise_window_min_for_status_fields()
 
     def _on_settings_field_click(self, _event=None):
         field = getattr(self, "settings_summary", None)
@@ -1258,6 +1552,8 @@ class SerialPortApp:
         port = selection[0]
         if self.settings_port_var.get() != port:
             self.settings_port_var.set(port)
+        else:
+            self._show_bottom_port_status(port)
 
     def _on_tree_double_click(self, _event=None):
         select_btn = getattr(self, "select_button", None)
@@ -1282,28 +1578,48 @@ class SerialPortApp:
             else:
                 device_var.set(device_text)
 
-    def _store_bottom_port_status(self, port, status):
+    def _store_bottom_port_status(self, port, kind=PORT_STATUS_KIND_SELECTED, **fields):
+        record = {"kind": kind}
+        for key in ("baud", "data_bits", "parity", "stop_bits"):
+            if key in fields:
+                record[key] = fields[key]
         if port:
-            self._port_bottom_status_by_port[port] = status
-        self._set_message_lines(port_text=status)
+            self._port_bottom_status_by_port[port] = record
+        self._set_message_lines(
+            port_text=bottom_port_status_text(port, **record) if port else ""
+        )
 
     def _show_bottom_port_status(self, port=None):
         if port is None:
             port = self._selected_port()
-        status = (
-            self._port_bottom_status_by_port.get(port, PORT_STATUS_CLOSED)
-            if port
-            else PORT_STATUS_CLOSED
-        )
-        self._set_message_lines(port_text=status)
+        if not port:
+            self._set_message_lines(port_text="")
+            return
+        record = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(port)
+        if isinstance(record, dict):
+            text = bottom_port_status_text(port, **record)
+        elif record:
+            text = bottom_port_status_text(port, record)
+        else:
+            text = bottom_port_status_text(port, PORT_STATUS_KIND_SELECTED)
+        self._set_message_lines(port_text=text)
 
     def _mark_port_status_unknown(self):
+        """Baud/Settings edits no longer overwrite Identified/Opened Port Status."""
         if self._suppress_port_status_event:
             return
         port = self._selected_port()
         if not port:
             return
-        self._store_bottom_port_status(port, PORT_STATUS_UNKNOWN)
+        record = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(port)
+        if isinstance(record, dict) and record.get("kind") in (
+            PORT_STATUS_KIND_OPENED,
+            PORT_STATUS_KIND_IDENTIFIED,
+            PORT_STATUS_KIND_FAILED,
+        ):
+            self._show_bottom_port_status(port)
+            return
+        self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
 
     def _set_identified_device(self, port, device):
         if not port:
@@ -1327,12 +1643,18 @@ class SerialPortApp:
         selected = None
         if getattr(self, "settings_device_var", None) is not None:
             selected = self._device_for_label(self.settings_device_var.get())
+        row = None
+        if port and getattr(self, "port_data", None) is not None:
+            row = self._port_row(port)
+        device_name = row[3] if row else getattr(self, "_matched_device_column", None)
+        identified_label = self._identified_connected_text(identified, device_name)
         self._set_message_lines(
             device_text=identified_device_message(
                 identified,
                 selected,
                 fail_count=getattr(self, "_identify_fail_count", 0),
                 fail_key=getattr(self, "_identify_fail_key", None),
+                identified_label=identified_label,
             )
         )
 
@@ -1514,12 +1836,12 @@ class SerialPortApp:
             row = self._port_row(port)
             status = "Identified" if row and row[3] else "Available"
             self._set_port_row(port, status=status, keep_device=True)
-            self._store_bottom_port_status(port, PORT_STATUS_CLOSED)
+            self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
             return
         self._release_serial()
         self._held_port = None
         if not self._reopen_held(port):
-            self._store_bottom_port_status(port, PORT_STATUS_FAILED)
+            self._store_bottom_port_status(port, PORT_STATUS_KIND_FAILED)
             return
         settings = self._serial_settings_from_ui()
         self._log(
@@ -1527,7 +1849,11 @@ class SerialPortApp:
             f"{self._format_settings_summary()}"
         )
         self._set_port_row(port, status="Open", keep_device=True)
-        self._store_bottom_port_status(port, PORT_STATUS_OPENED)
+        self._store_bottom_port_status(
+            port,
+            PORT_STATUS_KIND_OPENED,
+            **bottom_port_status_fields_from_serial_settings(settings),
+        )
 
     def _apply_connection_scan(self, port, found, settings, was_open, device=None):
         if found:
@@ -1549,6 +1875,11 @@ class SerialPortApp:
                 status="Identified",
                 device_name=found,
                 baud=settings.get("baudrate"),
+            )
+            self._store_bottom_port_status(
+                port,
+                PORT_STATUS_KIND_IDENTIFIED,
+                **bottom_port_status_fields_from_serial_settings(settings),
             )
             self._refresh_identified_device_message()
         else:
@@ -1788,6 +2119,7 @@ class SerialPortApp:
         win.configure(bg=UI_BG)
         win.transient(self.root)
         win.resizable(False, False)
+        self._apply_window_icon(win)
 
         parity_var = tk.StringVar(value=self.settings_parity_var.get())
         data_var = tk.StringVar(value=self.settings_data_var.get())
@@ -1798,6 +2130,7 @@ class SerialPortApp:
                 data_var.get(), stop_var.get(), parity_var.get(), flow_var.get()
             )
         )
+        self._settings_preview_var = preview_var
         applied_var = tk.StringVar(value=self._format_settings_summary())
 
         def sync_preview(*_args):
@@ -1863,18 +2196,22 @@ class SerialPortApp:
             return cell
 
         choices = self._settings_choices_for_current_port()
-        labeled_combo(white, "Data Bits", data_var, choices["data_bits"]).grid(
-            row=0, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Stop Bits", stop_var, choices["stop_bits"]).grid(
-            row=0, column=1, sticky="nw", pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Parity", parity_var, choices["parity"]).grid(
-            row=1, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
-        )
-        labeled_combo(white, "Flow", flow_var, choices["flow_control"]).grid(
-            row=1, column=1, sticky="nw", pady=(0, UI_GAP)
-        )
+        vars_by_key = {
+            "data_bits": data_var,
+            "parity": parity_var,
+            "stop_bits": stop_var,
+            "flow_control": flow_var,
+        }
+        field_cells = []
+        for index, (label, key) in enumerate(SETTINGS_DIALOG_FIELDS):
+            row, col = divmod(index, 2)
+            padx = (0, UI_GROUP_GAP) if col == 0 else (0, 0)
+            cell = labeled_combo(white, label, vars_by_key[key], choices[key])
+            cell.grid(
+                row=row, column=col, sticky="nw", padx=padx, pady=(0, UI_GAP)
+            )
+            field_cells.append((label, cell))
+        self._settings_dialog_fields = field_cells
 
         preview_width = self._chars_for_text(longest_settings_text(), extra_px=8)
 
@@ -1913,53 +2250,68 @@ class SerialPortApp:
     def _build_bottom_bar(self, parent):
         """Port Status / Device Status inline left; Select then Exit on the right."""
         self._bottom_bar = parent
-        parent.configure(height=UI_CONTROL_H)
-        parent.pack_propagate(False)
+        parent.configure(height=UI_CONTROL_H, bg=UI_BOTTOM)
+        parent.rowconfigure(0, minsize=UI_CONTROL_H, weight=0)
+        # labels, port wrap, device wrap (stretch), Select, Exit
+        parent.columnconfigure(0, weight=0)
+        parent.columnconfigure(1, weight=0)
+        parent.columnconfigure(2, weight=0)
+        parent.columnconfigure(3, weight=1)
+        parent.columnconfigure(4, weight=0)
+        parent.columnconfigure(5, weight=0)
 
-        exit_wrap, self.exit_button = self._flat_button(
-            parent, "Exit", command=self._on_exit
-        )
-        exit_wrap.pack(side=tk.RIGHT)
-
-        select_wrap, self.select_button = self._flat_button(
-            parent, "Select", command=self._on_select_port
-        )
-        self.select_button.configure(state=tk.DISABLED)
-        select_wrap.pack(side=tk.RIGHT, padx=(0, UI_GAP))
-        self._select_wrap = select_wrap
-        self._exit_wrap = exit_wrap
-
-        status_row = tk.Frame(parent, bg=UI_BOTTOM, height=UI_CONTROL_H)
-        status_row.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.port_status_var = tk.StringVar(value=PORT_STATUS_CLOSED)
+        self.port_status_var = tk.StringVar(value="")
         self.device_status_var = tk.StringVar(value=DEVICE_STATUS_UNIDENTIFIED)
         self.port_message_var = self.port_status_var
         self.device_message_var = self.device_status_var
         self._status_wraps = []
 
-        def status_group(label, var, sample):
-            group = tk.Frame(status_row, bg=UI_BOTTOM, height=UI_CONTROL_H)
-            group.pack(side=tk.LEFT, padx=(0, UI_GROUP_GAP), fill=tk.Y)
-            tk.Label(
-                group,
-                text=label,
+        def status_label(column, text, padx):
+            widget = tk.Label(
+                parent,
+                text=text,
                 bg=UI_BOTTOM,
                 fg=UI_FG,
                 font=self._font_label,
                 anchor="w",
-            ).pack(side=tk.LEFT, padx=(0, UI_GAP), fill=tk.Y)
-            wrap, value = self._outlined_status_value(group, var)
-            wrap.pack(side=tk.LEFT, pady=0)
-            self._status_wraps.append(wrap)
-            self._size_outlined_status_value(value, sample)
-            return value
+            )
+            widget.grid(row=0, column=column, sticky="nsw", padx=padx)
+            return widget
 
-        self.port_status_entry = status_group(
-            "Port Status:", self.port_status_var, port_status_size_samples()
+        self._port_status_caption = status_label(0, "Port Status:", (0, UI_GAP))
+        port_wrap, self.port_status_entry = self._outlined_status_value(
+            parent, self.port_status_var
         )
-        self.device_status_entry = status_group(
-            "Device Status:", self.device_status_var, device_status_size_samples()
+        port_wrap.grid(row=0, column=1, sticky="nsw", padx=(0, UI_GROUP_GAP))
+        self._port_status_wrap = port_wrap
+        self._status_wraps.append(port_wrap)
+        self._size_outlined_status_value(
+            self.port_status_entry, port_status_size_samples()
         )
+
+        self._device_status_caption = status_label(2, "Device Status:", (0, UI_GAP))
+        device_wrap, self.device_status_entry = self._outlined_status_value(
+            parent, self.device_status_var
+        )
+        device_wrap.grid(row=0, column=3, sticky="nsew", padx=(0, UI_GROUP_GAP))
+        self._device_status_wrap = device_wrap
+        self._device_status_group = device_wrap
+        self._status_wraps.append(device_wrap)
+        self._size_outlined_status_value(
+            self.device_status_entry, self._device_status_size_samples()
+        )
+
+        select_wrap, self.select_button = self._flat_button(
+            parent, "Select", command=self._on_select_port
+        )
+        self.select_button.configure(state=tk.DISABLED)
+        select_wrap.grid(row=0, column=4, sticky="e", padx=(0, UI_GAP))
+        exit_wrap, self.exit_button = self._flat_button(
+            parent, "Exit", command=self._on_exit
+        )
+        exit_wrap.grid(row=0, column=5, sticky="e")
+        self._select_wrap = select_wrap
+        self._exit_wrap = exit_wrap
 
     def _on_exit(self):
         self._print_handoff_json(exit_handoff_payload())
@@ -1981,12 +2333,16 @@ class SerialPortApp:
             return self.format_baud(baud)
         return vendor_id if vendor_id else "Unknown"
 
+    def _identified_connected_text(self, identified_device, device_name=None):
+        """Same Identified string for the Connected Device column and Device Status."""
+        info = self._device_attributes_for(identified_device)
+        return identified_connected_label(info, identified_device, device_name)
+
     def _driver_or_device_column(
         self, status, device_name, description, vendor_id=None, identified_device=None
     ):
         if status == "Identified":
-            info = self._device_attributes_for(identified_device)
-            label = identified_connected_label(info, identified_device, device_name)
+            label = self._identified_connected_text(identified_device, device_name)
             if label:
                 return label
             if device_name:
@@ -2439,6 +2795,7 @@ class SerialPortApp:
                 if result is None:
                     # demote Identified → Available
                     self._set_identified_device(port, None)
+                    self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
                     new_data.append(
                         ("Available", port, vendor_id, None, description, None)
                     )
@@ -2446,6 +2803,11 @@ class SerialPortApp:
                     name, found_baud, found_def = result
                     self._set_identified_device(port, found_def)
                     self._note_scan_identified(found_def, name, port)
+                    self._store_bottom_port_status(
+                        port,
+                        PORT_STATUS_KIND_IDENTIFIED,
+                        **bottom_port_status_fields_from_device(found_def, found_baud),
+                    )
                     new_data.append(
                         (
                             "Identified",
@@ -2590,11 +2952,18 @@ class SerialPortApp:
         self._identified_device_by_port = dict(identified_map or {})
         for port, found_def in self._identified_device_by_port.items():
             name = ""
+            found_baud = None
             for entry in port_data:
                 if entry[1] == port:
                     name = entry[3] or ""
+                    found_baud = entry[5]
                     break
             self._note_scan_identified(found_def, name, port)
+            self._store_bottom_port_status(
+                port,
+                PORT_STATUS_KIND_IDENTIFIED,
+                **bottom_port_status_fields_from_device(found_def, found_baud),
+            )
         self._refresh_device_ui(apply_baud=not self._held_port)
         self.known_ports = known_ports
         self.port_data = port_data

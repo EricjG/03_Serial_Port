@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.7 — In Use is a view filter; Scan Ports owns the auto-scan loop (Nov 26, 2026).
+Version: 3.12 — DE-9 app icon; window height extra goes to the Automated table (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -37,7 +37,7 @@ Version: 3.7 — In Use is a view filter; Scan Ports owns the auto-scan loop (No
 - Column titles and cells are left-anchored
 - Fixed column widths: Status 80, Port # 64 (fits `COM99` plus 2px cell padding), ID/Baud 110; Serial Driver / Connected Device fills the rest. The Port *dropdown* stays sized from `/tmp/serialdemo/ttyUSB0`
 - Flat 1px `#A0A0A0` border around the list (same as the white boxes), one line
-- 6 rows, 2px cell padding, 24px row height
+- Default **6** rows, 2px cell padding, 24px row height. Extra or lost *window height* changes only this table (more or fewer visible rows). Minimum is **1** row. No maximum.
 - Port names are the real Windows names (`COM4`), sorted naturally (`COM2` before `COM10`)
 - IDs show as hex VID:PID, e.g. `0x10C4:0xEA60`
 - Single-click a row to select that port (row turns yellow; Port box follows)
@@ -54,12 +54,12 @@ Version: 3.7 — In Use is a view filter; Scan Ports owns the auto-scan loop (No
 - Panels, white boxes, and the Open/Identify column share one right edge; labels and controls share one left edge
 
 ### White box 1
-- One row: **Port** combo (wide enough for `/tmp/serialdemo/ttyUSB0`), **Baud** (~8 chars), **Settings**, **Open** at the right
+- One row: **Port** combo (sized from `/tmp/serialdemo/ttyUSB0`, then shortened by the Baud grow), **Baud** (1.5× the old 8-char width), **Settings**, **Open** at the right. Port shrinks by the same pixel amount Baud grows, so the row width and Open stay put.
 - 16px between those groups
 - **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected port's `serial_ports.json` chip `baud_rates` (or `STANDARD_BAUD_RATES` clipped to that chip's `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port (no VID/PID match) uses the standard baud list (no 600). Selecting a device does not shrink this list. The user may still type a rate. Do not add a divider.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
-- **Settings**: read-only field with the same 1px outline, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); width is computed from the longest legal string (`8 - 1 - Space - xOff/xOn`); click opens the dialog
+- **Settings**: read-only field with the same 1px outline, default `8N1 - No Flow` (data/parity/stop shorthand from the same helper as Port Status, then flow: **No Flow** / **RTS/CTS** / **XON/XOFF**). Width is computed from the longest legal string (`8N1 - XON/XOFF`); click opens the dialog
 - **Open** is one 96px button with three states (no port path in the label):
   - `Open` when the port is free
   - `Close` when this app has it open (click closes it)
@@ -89,9 +89,9 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Still inside the orange frame, not in a blue box
 - Left: **Port Status:** [value] and **Device Status:** [value] inline (exception to labels-above)
 - Right: **Select** then **Exit**, each 96px, 8px apart; Exit’s right edge is the common right edge
-- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. They are Labels (not character-width entries). After `update_idletasks()`, wrap width is `winfo_reqwidth()` of a temp Label using the widget’s resolved font (`Font(font=widget.cget("font"))` / `nametofont`) for every value the field can show (**Unidentified**, **Identified**, **3rd Failure**, **Unknown Device**, … for Device Status; **Unknown** / **Closed** / **Opened** / **Failed** for Port Status), plus the 1px outline, then rounded up to the 8px grid. The window min size grows to that bottom-row width so the row cannot squeeze the last glyph.
-- Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (Port Settings / Baud changed). Picking a Device does **not** set Port Status to Unknown
-- Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
+- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. They are Labels (not character-width entries). After `update_idletasks()`, wrap width is `winfo_reqwidth()` of a temp Label using the widget’s resolved font (`Font(font=widget.cget("font"))` / `nametofont`) for every value the field can show (**Unidentified**, **Identified**, **3rd Failure**, **Unknown Device**, plus every Identified device label from `devices.json` + `devices_info.json`, for Device Status; **COM256**, **COM256 921.6K 8N1**, **COM256 - Failed to open**, … for Port Status), plus the 1px outline, then rounded up to the 8px grid. Device Status stretches into the free space between Port Status and Select/Exit. If that leftover is still too narrow for the longest label, the window minimum width grows so the text is never clipped.
+- Port Status: clicking a list row (or picking the port) shows just the port, e.g. `COM8`. After Identify/Scan confirms a device on that port, it shows `COM8 115.2K 8N1` — short baud (`300`, `1.2K`, `9.6K`, `19.2K`, `115.2K`, `460.8K`, `921.6K`, …) then data bits, parity letter (N/E/O/M/S), stop bits, using the settings that identified it. After Open succeeds, the same short format uses the settings the port was opened with. If Open fails: `COM8 - Failed to open`. Picking a Device does **not** change Port Status. Changing Baud / Port Settings does **not** overwrite an Identified or Opened line.
+- Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then the same text as that row’s **Serial Driver / Connected Device** cell (manufacturer, model, and short description from `devices_info.json` when present, otherwise the identify `device_column` text). Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
 - Identify button failures (same device, try-again): **Failed**, then **2nd Failure**, **3rd Failure**, **4th Failure**, … (normal English ordinals: 11th, 21st, 22nd, 23rd). A successful Scan Devices confirmation of the selected device sets **Identified** and clears the count. A Scan Devices miss does not increment this count
 - If `devices.json` is missing or invalid, Device Status shows that error. Errors from `serial_ports.json` / `devices_info.json` are logged; they do not overwrite a devices.json error
 
@@ -99,21 +99,22 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Open by **click** on the main **Settings** value
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
-- Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified. Baud’s unknown-port fallback is also `STANDARD_BAUD_RATES`, but a **matched chip** drives the Baud list (see White box 1). Data/Stop/Parity/Flow still ignore the chip catalog when no device is identified; an identified device’s own `serial_parameters` lists win when present:
+- Defaults: Data Bits 8, Parity None, Stop Bits 1, Flow None
+- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified. Baud’s unknown-port fallback is also `STANDARD_BAUD_RATES`, but a **matched chip** drives the Baud list (see White box 1). Data/Parity/Stop/Flow still ignore the chip catalog when no device is identified; an identified device’s own `serial_parameters` lists win when present:
   - Data: 8, 7, 6, 5
-  - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space
+  - Stop: 1, 2
   - Flow: None, RTS/CTS, xOff/xOn
-- White inner box, labels above controls:
-  - **Data Bits** / **Stop Bits** / **Parity** / **Flow** dropdowns
-  - Green readonly box = live draft (Data - Stop - Parity - Flow); **Select** (96px) to the right
+- White inner box, labels above controls, 2×2 reading order:
+  - **Data Bits** / **Parity** on the first row, **Stop Bits** / **Flow** on the second
+  - Green readonly box = live draft (`8N1 - No Flow`, same helper as the main Settings field); **Select** (96px) to the right
 - Below white box, still in blue: cream readonly current applied settings + **Exit** (96px)
-- Preview lines are sized from the longest legal settings string
+- Preview lines are sized from the longest legal settings string (`8N1 - XON/XOFF`)
 - **Select** applies values, updates main Settings, sets Port Status to **Unknown**, closes
 - **Exit** / window X closes without applying
 - Enter = Select, Escape = Exit
 
 ## Window
-- Default size fits the content: 3px orange frame, then 8px padding on every edge (including the bottom). No extra empty band below Port Status / Select / Exit
-- Minimum size is that content size, so the title strip, Automated list (6 rows), Manually boxes, status row, and Select/Exit stay on screen
+- Default size fits the content at 6 Automated rows: 3px orange frame, then 8px padding on every edge (including the bottom). No extra empty band below Port Status / Select / Exit
+- Minimum *width* still fits that content (Device Status labels, Port dropdown, Open/Identify). Minimum *height* is the same layout with the Automated table showing exactly **one** row. No maximum height. Title strip, Manually boxes, and the bottom bar keep their height; only the table row has grid weight.
+- Title-bar icon is a drawn DE-9 (DB9) connector face (Iris orange, 5+4 pins), not the default Tk feather. Files in `assets/` (`serial_icon_16/32/48/256.png`, `serial_icon.png`, `serial_icon.ico`). Applied with `iconphoto` on the main window and pop-ups; Windows also uses `iconbitmap` with the `.ico`.
