@@ -81,25 +81,20 @@ _PROBE = textwrap.dedent(
     win = app._settings_dialog
     win.deiconify()
     win.update()
-    stored = [label for label, _cell in getattr(app, "_settings_dialog_fields", ())]
+    stored_fields = list(getattr(app, "_settings_dialog_fields", ()))
+    stored = [label for label, _cell in stored_fields]
     want = [label for label, _key in SETTINGS_DIALOG_FIELDS]
     if stored != want:
         failures.append(f"dialog field order {stored} != {want}")
-    found = []
-
-    def walk(widget):
-        if isinstance(widget, tk.Label):
-            text = str(widget.cget("text") or "")
-            if text in set(want):
-                found.append((int(widget.winfo_rooty()), int(widget.winfo_rootx()), text))
-        for child in widget.winfo_children():
-            walk(child)
-
-    walk(win)
-    found.sort()
-    names = [text for _y, _x, text in found]
-    if names != want:
-        failures.append(f"dialog on-screen order {names} != {want} (geom={found})")
+    for index, (label, cell) in enumerate(stored_fields):
+        info = cell.grid_info()
+        row, col = divmod(index, 2)
+        got_row = int(str(info.get("row", -1)))
+        got_col = int(str(info.get("column", -1)))
+        if got_row != row or got_col != col:
+            failures.append(
+                f"{label} at grid ({got_row},{got_col}), want ({row},{col})"
+            )
     preview = getattr(app, "_settings_preview_var", None)
     if preview is None or preview.get() != "8N1 - No Flow":
         failures.append(
