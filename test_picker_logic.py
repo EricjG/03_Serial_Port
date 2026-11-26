@@ -636,6 +636,7 @@ class LayoutTokenTests(unittest.TestCase):
         from serial_port_app import (
             BAUD_COMBO_CHARS,
             BAUD_COMBO_WIDTH_SCALE,
+            ICON_PNG_SIZES,
             LONGEST_PORT_SAMPLE,
             PICKER_COMBOBOX_ARROWSIZE,
             PICKER_COMBOBOX_STYLE,
@@ -650,6 +651,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_TREE_CELL_PAD,
             UI_TREE_COL_WIDTHS,
             UI_TREE_PORT_SAMPLE,
+            UI_TREE_MIN_ROWS,
             UI_TREE_ROWS,
             picker_combobox_layout_element_names,
         )
@@ -663,6 +665,7 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_ORANGE_BORDER, 3)
         self.assertEqual(UI_OUTLINE, "#A0A0A0")
         self.assertEqual(UI_TREE_ROWS, 6)
+        self.assertEqual(UI_TREE_MIN_ROWS, 1)
         self.assertEqual(UI_TREE_CELL_PAD, 2)
         self.assertEqual(
             UI_TREE_COL_WIDTHS,
@@ -672,6 +675,7 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
         self.assertEqual(BAUD_COMBO_CHARS, 8)
         self.assertEqual(BAUD_COMBO_WIDTH_SCALE, 1.5)
+        self.assertEqual(ICON_PNG_SIZES, (16, 32, 48, 256))
         self.assertEqual(int(round(80 * BAUD_COMBO_WIDTH_SCALE)), 120)
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)

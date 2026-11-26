@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.10 — Settings as `8N1 - No Flow`; Baud 1.5× (stolen from Port); dialog Data/Parity/Stop/Flow (Nov 26, 2026).
+Version: 3.12 — DE-9 app icon; window height extra goes to the Automated table (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -37,7 +37,7 @@ Version: 3.10 — Settings as `8N1 - No Flow`; Baud 1.5× (stolen from Port); di
 - Column titles and cells are left-anchored
 - Fixed column widths: Status 80, Port # 64 (fits `COM99` plus 2px cell padding), ID/Baud 110; Serial Driver / Connected Device fills the rest. The Port *dropdown* stays sized from `/tmp/serialdemo/ttyUSB0`
 - Flat 1px `#A0A0A0` border around the list (same as the white boxes), one line
-- 6 rows, 2px cell padding, 24px row height
+- Default **6** rows, 2px cell padding, 24px row height. Extra or lost *window height* changes only this table (more or fewer visible rows). Minimum is **1** row. No maximum.
 - Port names are the real Windows names (`COM4`), sorted naturally (`COM2` before `COM10`)
 - IDs show as hex VID:PID, e.g. `0x10C4:0xEA60`
 - Single-click a row to select that port (row turns yellow; Port box follows)
@@ -115,5 +115,6 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Enter = Select, Escape = Exit
 
 ## Window
-- Default size fits the content: 3px orange frame, then 8px padding on every edge (including the bottom). No extra empty band below Port Status / Select / Exit
-- Minimum size is that content size, so the title strip, Automated list (6 rows), Manually boxes, status row, and Select/Exit stay on screen
+- Default size fits the content at 6 Automated rows: 3px orange frame, then 8px padding on every edge (including the bottom). No extra empty band below Port Status / Select / Exit
+- Minimum *width* still fits that content (Device Status labels, Port dropdown, Open/Identify). Minimum *height* is the same layout with the Automated table showing exactly **one** row. No maximum height. Title strip, Manually boxes, and the bottom bar keep their height; only the table row has grid weight.
+- Title-bar icon is a drawn DE-9 (DB9) connector face (Iris orange, 5+4 pins), not the default Tk feather. Files in `assets/` (`serial_icon_16/32/48/256.png`, `serial_icon.png`, `serial_icon.ico`). Applied with `iconphoto` on the main window and pop-ups; Windows also uses `iconbitmap` with the `.ico`.

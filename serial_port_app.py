@@ -9,8 +9,10 @@ from serial.tools import list_ports  # requires pyserial package: pip install py
 import serial  # requires pyserial package: pip install pyserial
 import json
 import re
+import sys
 import threading
 import time
+from pathlib import Path
 
 from device_data import (
     baud_rates_for_device,
@@ -115,6 +117,7 @@ UI_TITLE_H = 28
 UI_ORANGE_BORDER = 3
 UI_OUTLINE = "#A0A0A0"
 UI_TREE_ROWS = 6
+UI_TREE_MIN_ROWS = 1
 UI_TREE_CELL_PAD = 2
 UI_TREE_PORT_SAMPLE = "COM99"
 # Port # sized for COM99 plus the 2px cell padding. Saved width goes to
@@ -125,7 +128,29 @@ UI_TREE_COL_WIDTHS = {
     "Port #": 64,
     "ID/Baud": 110,
 }
+APP_DIR = Path(__file__).resolve().parent
+ICON_PNG_SIZES = (16, 32, 48, 256)
+ICON_ICO_NAME = "serial_icon.ico"
+ICON_PNG_NAME = "serial_icon.png"
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
+
+
+def app_icon_png_paths(root=APP_DIR):
+    assets = Path(root) / "assets"
+    paths = []
+    for size in ICON_PNG_SIZES:
+        path = assets / f"serial_icon_{size}.png"
+        if path.is_file():
+            paths.append(path)
+    hero = assets / ICON_PNG_NAME
+    if hero.is_file() and hero not in paths:
+        paths.append(hero)
+    return tuple(paths)
+
+
+def app_icon_ico_path(root=APP_DIR):
+    path = Path(root) / "assets" / ICON_ICO_NAME
+    return path if path.is_file() else None
 BAUD_COMBO_CHARS = 8
 BAUD_COMBO_WIDTH_SCALE = 1.5
 # Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
@@ -299,6 +324,8 @@ class SerialPortApp:
             self._device_entries[0][1] if self._device_entries else None
         )
 
+        self._icon_photos = []
+        self._apply_window_icon(self.root)
         self._init_fonts()
         style = ttk.Style()
         style.configure(
@@ -332,13 +359,41 @@ class SerialPortApp:
         self._size_settings_summary()
         self._size_status_fields()
         self.root.update_idletasks()
-        req_w = self.root.winfo_reqwidth()
-        req_h = self.root.winfo_reqheight()
-        self.root.minsize(req_w, req_h)
-        self.root.geometry(f"{req_w}x{req_h}")
+        self._apply_window_size_policy()
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
+    def _apply_window_icon(self, win):
+        """Replace the Tk feather with the DE-9 serial-port icon."""
+        if win is None:
+            return
+        photos = getattr(self, "_icon_photos", None)
+        if not photos:
+            photos = []
+            for path in app_icon_png_paths():
+                try:
+                    photos.append(tk.PhotoImage(file=str(path)))
+                except tk.TclError:
+                    continue
+            self._icon_photos = photos
+        if photos:
+            try:
+                win.iconphoto(True, *photos)
+            except tk.TclError:
+                try:
+                    win.iconphoto(False, photos[-1])
+                except tk.TclError:
+                    pass
+        ico = app_icon_ico_path()
+        if ico is not None and sys.platform == "win32":
+            try:
+                win.iconbitmap(default=str(ico))
+            except tk.TclError:
+                try:
+                    win.iconbitmap(str(ico))
+                except tk.TclError:
+                    pass
+
     def _init_fonts(self):
         """Segoe UI on Windows; a close sans-serif if that face is missing."""
         try:
@@ -563,14 +618,16 @@ class SerialPortApp:
         main.pack(fill=tk.BOTH, expand=True)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(0, weight=0)
-        main.rowconfigure(1, weight=0)
+        main.rowconfigure(1, weight=1)
         main.rowconfigure(2, weight=0)
         main.rowconfigure(3, weight=0)
+        self._main = main
 
         title_strip = self._blue_box(main, padx=UI_PAD, pady=0)
         title_strip.configure(height=UI_TITLE_H)
         title_strip.pack_propagate(False)
         title_strip.grid(row=0, column=0, sticky="ew", pady=(0, UI_GAP))
+        self._title_strip = title_strip
         tk.Label(
             title_strip,
             text="Port & Device Identification",
@@ -581,11 +638,13 @@ class SerialPortApp:
         ).pack(side=tk.LEFT, fill=tk.Y)
 
         status_box = self._blue_box(main)
-        status_box.grid(row=1, column=0, sticky="ew", pady=(0, UI_GAP))
+        status_box.grid(row=1, column=0, sticky="nsew", pady=(0, UI_GAP))
+        self._automated_box = status_box
         self._build_status_tree(status_box)
 
         settings_box = self._blue_box(main)
         settings_box.grid(row=2, column=0, sticky="ew", pady=(0, UI_GAP))
+        self._settings_box = settings_box
         self._build_port_settings_scaffold(settings_box)
 
         # Match Open/Identify inset: blue pad + white outline + white pad.
@@ -602,7 +661,9 @@ class SerialPortApp:
     def _build_status_tree(self, parent):
         """Automated box: title + check-buttons, then column titles and the port list."""
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=0)
+        parent.rowconfigure(0, weight=0)
+        parent.rowconfigure(1, weight=0)
+        parent.rowconfigure(2, weight=1, minsize=UI_CONTROL_H * UI_TREE_MIN_ROWS)
 
         header = tk.Frame(parent, bg=UI_HEADER)
         header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, UI_GAP))
@@ -647,14 +708,14 @@ class SerialPortApp:
         self._tree_header_scroll_pad.grid(row=0, column=len(cols), sticky="ns")
 
         tree_host = self._outline_box(parent, bg="#FFFFFF")
-        tree_host.configure(height=UI_TREE_ROWS * UI_CONTROL_H)
-        tree_host.grid(row=2, column=0, sticky="ew")
+        tree_host.configure(height=UI_CONTROL_H * UI_TREE_MIN_ROWS)
+        tree_host.grid(row=2, column=0, sticky="nsew")
         tree_host.pack_propagate(False)
         self.tree = ttk.Treeview(
             tree_host,
             columns=self._tree_cols,
             show="",  # titles are in blue area above
-            height=UI_TREE_ROWS,
+            height=UI_TREE_MIN_ROWS,
         )
         for name, anchor, width in cols:
             stretch = name not in UI_TREE_COL_WIDTHS
@@ -681,6 +742,7 @@ class SerialPortApp:
 
         self.tree.bind("<Configure>", self._sync_tree_header_widths)
         parent.bind("<Configure>", self._sync_tree_header_widths)
+        tree_host.bind("<Configure>", self._sync_tree_visible_rows)
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.root.after(50, self._apply_tree_column_widths)
@@ -702,23 +764,104 @@ class SerialPortApp:
         except tk.TclError:
             pass
 
+    def _tree_row_height(self):
+        """One Automated table row, from a live bbox when possible."""
+        tree = getattr(self, "tree", None)
+        if tree is not None:
+            try:
+                tree.update_idletasks()
+                for iid in tree.get_children():
+                    bbox = tree.bbox(iid)
+                    if bbox and bbox[3]:
+                        return max(1, int(bbox[3]))
+            except tk.TclError:
+                pass
+            try:
+                style_h = int(
+                    float(str(ttk.Style().lookup("Treeview", "rowheight") or 0))
+                )
+                if style_h:
+                    return style_h
+            except (tk.TclError, TypeError, ValueError):
+                pass
+        return UI_CONTROL_H
+
     def _fit_tree_host(self):
-        """Keep the list viewport at exactly 6 data rows, no leftover heading strip."""
+        """Keep the list viewport at least one data row. Extra height fills here."""
+        host = getattr(self, "_tree_host", None)
+        if host is None:
+            return
+        try:
+            min_h = self._tree_row_height() * UI_TREE_MIN_ROWS
+            current = int(host.cget("height") or 0)
+            if current < min_h:
+                host.configure(height=min_h)
+            box = getattr(self, "_automated_box", None)
+            if box is not None:
+                box.rowconfigure(2, minsize=min_h, weight=1)
+            self._sync_tree_visible_rows()
+        except tk.TclError:
+            pass
+
+    def _sync_tree_visible_rows(self, event=None):
+        """Treeview row count follows the host height so extra pixels become rows."""
         host = getattr(self, "_tree_host", None)
         tree = getattr(self, "tree", None)
         if host is None or tree is None:
             return
+        if event is not None and event.widget is not host:
+            return
         try:
-            tree.update_idletasks()
-            row_h = UI_CONTROL_H
-            for iid in tree.get_children():
-                bbox = tree.bbox(iid)
-                if bbox and bbox[3]:
-                    row_h = bbox[3]
-                    break
-            host.configure(height=row_h * UI_TREE_ROWS)
-        except tk.TclError:
+            row_h = self._tree_row_height()
+            inner = max(row_h, int(host.winfo_height()) - 2)
+            rows = max(UI_TREE_MIN_ROWS, inner // row_h)
+            if int(str(tree.cget("height") or 0)) != rows:
+                tree.configure(height=rows)
+        except (tk.TclError, TypeError, ValueError):
             pass
+
+    def _window_min_height(self):
+        """Full window height when the Automated table shows exactly one row."""
+        root = getattr(self, "root", None)
+        host = getattr(self, "_tree_host", None)
+        if root is None:
+            return UI_CONTROL_H
+        try:
+            root.update_idletasks()
+            req_h = int(root.winfo_reqheight())
+            row_h = self._tree_row_height()
+            if host is None:
+                return req_h
+            host_h = int(host.winfo_reqheight() or host.cget("height") or 0)
+            if host_h <= 0:
+                host_h = UI_TREE_ROWS * row_h
+            extra = max(0, host_h - row_h * UI_TREE_MIN_ROWS)
+            return max(row_h, req_h - extra)
+        except (tk.TclError, TypeError, ValueError):
+            return UI_CONTROL_H
+
+    def _window_default_height(self):
+        row_h = self._tree_row_height()
+        extra_rows = max(0, UI_TREE_ROWS - UI_TREE_MIN_ROWS)
+        return self._window_min_height() + extra_rows * row_h
+
+    def _apply_window_size_policy(self):
+        """Default 6 table rows; min 1 row; no max; extra height goes to the table."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        try:
+            root.update_idletasks()
+            req_w = int(root.winfo_reqwidth())
+            min_w, _min_h = root.minsize()
+            width = max(int(min_w or 0), req_w)
+            min_h = self._window_min_height()
+            default_h = self._window_default_height()
+            root.minsize(width, min_h)
+            root.resizable(True, True)
+            root.geometry(f"{width}x{default_h}")
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return
 
     def _fit_fixed_tree_columns(self):
         self._apply_tree_column_widths()
@@ -1176,13 +1319,17 @@ class SerialPortApp:
             chrome = 2 * UI_ORANGE_BORDER + 2 * UI_PAD + 2 * bottom_inset
             needed = bar_w + chrome if bar_w else 0
             req_w = int(root.winfo_reqwidth())
-            req_h = int(root.winfo_reqheight())
-            min_w, min_h = root.minsize()
+            min_w, _old_min_h = root.minsize()
             width = max(int(min_w or 0), req_w, needed)
-            height = max(int(min_h or 0), req_h)
-            root.minsize(width, height)
+            min_h = self._window_min_height()
+            root.minsize(width, min_h)
             if int(root.winfo_width() or 0) < width:
-                root.geometry(f"{width}x{max(int(root.winfo_height() or 0), height)}")
+                height = max(
+                    int(root.winfo_height() or 0),
+                    self._window_default_height(),
+                    min_h,
+                )
+                root.geometry(f"{width}x{height}")
         except (tk.TclError, TypeError, ValueError, AttributeError):
             return
 
@@ -1953,6 +2100,7 @@ class SerialPortApp:
         win.configure(bg=UI_BG)
         win.transient(self.root)
         win.resizable(False, False)
+        self._apply_window_icon(win)
 
         parity_var = tk.StringVar(value=self.settings_parity_var.get())
         data_var = tk.StringVar(value=self.settings_data_var.get())
