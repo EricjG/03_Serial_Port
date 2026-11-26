@@ -8,7 +8,6 @@ import re
 
 STANDARD_BAUD_RATES = (
     300,
-    600,
     1200,
     2400,
     4800,

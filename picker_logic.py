@@ -1,6 +1,7 @@
 """Pure picker helpers (no Tkinter, no serial). Used by serial_port_app and tests."""
 
 import re
+from itertools import product
 
 DEFAULT_PARITY = "None"
 STATUS_AVAILABLE = "Available"
@@ -8,6 +9,45 @@ STATUS_IN_USE = "In Use"
 STATUS_OPEN = "Open"
 STATUS_IDENTIFIED = "Identified"
 STATUS_NONE = "None Available"
+
+DATA_BITS_CHOICES = ("8", "7", "6", "5")
+STOP_BITS_CHOICES = ("1", "2")
+PARITY_CHOICES = ("None", "Odd", "Even", "Mark", "Space")
+FLOW_XOFF_XON = "xOff/xOn"
+FLOW_CHOICES = ("None", "RTS/CTS", FLOW_XOFF_XON)
+FLOW_ALIASES = {
+    "XON/XOFF": FLOW_XOFF_XON,
+    "XOFF/XON": FLOW_XOFF_XON,
+    "XOff/xOn": FLOW_XOFF_XON,
+    "xon/xoff": FLOW_XOFF_XON,
+    "xoff/xon": FLOW_XOFF_XON,
+}
+
+PORT_STATUS_CLOSED = "Closed"
+PORT_STATUS_OPENED = "Opened"
+PORT_STATUS_FAILED = "Failed"
+PORT_STATUS_UNKNOWN = "Unknown"
+
+DEVICE_STATUS_UNIDENTIFIED = "Unidentified"
+DEVICE_STATUS_IDENTIFIED = "Identified"
+
+BAUD_SHORT = [
+    (300, "300"),
+    (1200, "1.2K"),
+    (2400, "2.4K"),
+    (4800, "4.8K"),
+    (9600, "9.6K"),
+    (14400, "14.4K"),
+    (19200, "19.2K"),
+    (28800, "28.8K"),
+    (38400, "38.4K"),
+    (57600, "57.6K"),
+    (115200, "115.2K"),
+    (230400, "230.4K"),
+    (460800, "460.8K"),
+    (921600, "921.6K"),
+]
+BAUD_SHORT_BY_VALUE = {value: label for value, label in BAUD_SHORT}
 
 STATUS_RANK = {
     STATUS_OPEN: 0,
@@ -63,6 +103,61 @@ def format_settings_text(data, stop, parity, flow):
     return f"{data} - {stop} - {parity} - {flow}"
 
 
+def normalize_flow_choice(flow):
+    """Map old/alias spellings onto the slide-3 Flow list."""
+    text = "" if flow is None else str(flow).strip()
+    if not text:
+        return "None"
+    if text in FLOW_CHOICES:
+        return text
+    mapped = FLOW_ALIASES.get(text) or FLOW_ALIASES.get(text.upper())
+    if mapped:
+        return mapped
+    return "None"
+
+
+def longest_settings_text(
+    data_choices=DATA_BITS_CHOICES,
+    stop_choices=STOP_BITS_CHOICES,
+    parity_choices=PARITY_CHOICES,
+    flow_choices=FLOW_CHOICES,
+):
+    """Longest Data - Stop - Parity - Flow string from the legal lists."""
+    longest = ""
+    for data, stop, parity, flow in product(
+        data_choices, stop_choices, parity_choices, flow_choices
+    ):
+        text = format_settings_text(data, stop, parity, flow)
+        if len(text) > len(longest):
+            longest = text
+    return longest
+
+
+def format_baud_label(baud):
+    """Typical-speeds short label, e.g. 115200 -> 115.2K."""
+    if baud is None:
+        return None
+    try:
+        baud = int(baud)
+    except (TypeError, ValueError):
+        return str(baud)
+    return BAUD_SHORT_BY_VALUE.get(baud, str(baud))
+
+
+def picker_device_label(device, baud_text):
+    """Dropdown text: Manufacturer  model  115.2K Baud."""
+    if not device:
+        return None
+    manufacturer = (device.get("manufacturer") or "").strip()
+    model = (device.get("model") or "").strip()
+    baud = "" if baud_text is None else str(baud_text).strip()
+    head = "  ".join(part for part in (manufacturer, model) if part)
+    if baud:
+        baud_part = f"{baud} Baud"
+        return f"{head}  {baud_part}" if head else baud_part
+    return head or None
+
+
 def natural_port_sort_key(name):
     """COM2 before COM10; also works for ttyUSB2 vs ttyUSB10."""
     text = "" if name is None else str(name)
@@ -101,7 +196,7 @@ def port_event_message(port, event):
     return f"Port: {port} is {event}"
 
 
-UNKNOWN_DEVICE_MESSAGE = "Device: Unknown Device"
+UNKNOWN_DEVICE_MESSAGE = DEVICE_STATUS_UNIDENTIFIED
 
 
 def device_identity_key(device):
@@ -127,13 +222,17 @@ def device_message_text(device):
     return f"Device: {name}" if name else "Device:"
 
 
-def identified_device_message(identified_device, selected_device):
-    """Bottom Device: line. Unknown until this port is identified as the dropdown device."""
+def device_status_text(identified_device, selected_device):
+    """Bottom Device Status. Unidentified until Identify or Scan Devices confirms."""
     identified_key = device_identity_key(identified_device)
     if identified_key and identified_key == device_identity_key(selected_device):
-        text = device_message_text(identified_device)
-        return text if text != "Device:" else UNKNOWN_DEVICE_MESSAGE
-    return UNKNOWN_DEVICE_MESSAGE
+        return DEVICE_STATUS_IDENTIFIED
+    return DEVICE_STATUS_UNIDENTIFIED
+
+
+def identified_device_message(identified_device, selected_device):
+    """Bottom Device Status value. Unidentified until this port matches the dropdown device."""
+    return device_status_text(identified_device, selected_device)
 
 
 def apply_header_button_click(in_use, scan_ports, scan_devices):

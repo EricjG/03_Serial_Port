@@ -23,15 +23,29 @@ from device_data import (
     parse_usb_id,
 )
 from picker_logic import (
+    BAUD_SHORT,
+    DATA_BITS_CHOICES,
     DEFAULT_PARITY,
+    FLOW_CHOICES,
+    FLOW_XOFF_XON,
+    PARITY_CHOICES,
+    PORT_STATUS_CLOSED,
+    PORT_STATUS_FAILED,
+    PORT_STATUS_OPENED,
+    PORT_STATUS_UNKNOWN,
+    DEVICE_STATUS_UNIDENTIFIED,
+    STOP_BITS_CHOICES,
     apply_header_button_click,
     check_button_char_width,
     dropdown_ports,
-    identified_device_message,
+    format_baud_label,
     format_settings_text,
     format_vid_pid,
+    identified_device_message,
+    longest_settings_text,
+    normalize_flow_choice,
     picker_control_state,
-    port_event_message,
+    picker_device_label,
     unique_device_labels,
     visible_tree_rows,
 )
@@ -57,39 +71,18 @@ UI_DISABLED = "#808080"
 UI_ROW_SELECTED = "#FFFF00"
 UI_CURRENT_SETTINGS = "#FFF2CC"
 
-PARITY_CHOICES = ("None", "Even", "Odd", "Mark", "Space")
-STOP_BITS_CHOICES = ("1", "1.5", "2")
-DATA_BITS_CHOICES = ("5", "6", "7", "8")
-FLOW_CHOICES = ("None", "XON/XOFF", "RTS/CTS", "DSR/DTR")
 PARITY_TO_UI = {"N": "None", "E": "Even", "O": "Odd", "M": "Mark", "S": "Space"}
 UI_TO_PARITY = {label: code for code, label in PARITY_TO_UI.items()}
-
-BAUD_SHORT = [
-    (300, "300"),
-    (600, "600"),
-    (1200, "1.2K"),
-    (2400, "2.4K"),
-    (4800, "4.8K"),
-    (9600, "9.6K"),
-    (14400, "14.4K"),
-    (19200, "19.2K"),
-    (28800, "28.8K"),
-    (38400, "38.4K"),
-    (57600, "57.6K"),
-    (115200, "115.2K"),
-    (230400, "230.4K"),
-    (460800, "460.8K"),
-    (921600, "921.6K"),
-]
-BAUD_SHORT_BY_VALUE = {v: s for v, s in BAUD_SHORT}
+UI_PAD = 6
+UI_FONT_CANDIDATES = ("Segoe UI", "Noto Sans", "DejaVu Sans", "Arial")
 
 
 class SerialPortApp:
     def __init__(self, root):
         self.root = root
         self.root.title(f"Serial Port Application v{APP_VERSION}")
-        self.root.geometry("720x480")
-        self.root.minsize(700, 440)
+        self.root.geometry("740x540")
+        self.root.minsize(700, 480)
         self.root.configure(bg=UI_BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_exit)
 
@@ -115,6 +108,8 @@ class SerialPortApp:
         self._suppress_auto_toggle = False
         self._device_entries = []
         self._identified_device_by_port = {}
+        self._port_bottom_status_by_port = {}
+        self._suppress_port_status_event = False
         self._devices_load_error = None
 
         self.device_definitions, self._devices_load_error = load_device_file(
@@ -122,12 +117,13 @@ class SerialPortApp:
         )
         self._rebuild_device_entries()
 
+        self._init_fonts()
         style = ttk.Style()
-        style.configure("Treeview", font=("Arial", 10), rowheight=22)
+        style.configure("Treeview", font=self._font_body, rowheight=22)
         style.configure(
-            "Treeview.Heading", font=("Arial", 10, "bold"), foreground="#000000"
+            "Treeview.Heading", font=self._font_label, foreground="#000000"
         )
-        style.configure("TCombobox", font=("Arial", 10, "bold"))
+        style.configure("TCombobox", font=self._font_label)
         style.map(
             "Treeview",
             background=[("selected", UI_ROW_SELECTED)],
@@ -145,12 +141,30 @@ class SerialPortApp:
 
         self._build_ui()
         self.root.update_idletasks()
+        self._size_settings_summary()
+        self._schedule_device_combo_align()
         req_w = max(700, self.root.winfo_reqwidth())
-        req_h = max(440, self.root.winfo_reqheight())
+        req_h = max(480, self.root.winfo_reqheight())
         self.root.minsize(req_w, req_h)
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
+    def _init_fonts(self):
+        """Segoe UI on Windows; a close sans-serif if that face is missing."""
+        try:
+            available = set(tkfont.families())
+        except tk.TclError:
+            available = set()
+        family = next(
+            (name for name in UI_FONT_CANDIDATES if name in available),
+            "TkDefaultFont",
+        )
+        self._font_family = family
+        self._font_body = (family, 9)
+        self._font_label = (family, 9, "bold")
+        self._font_title = (family, 10, "bold")
+        self._font_button = (family, 9, "bold")
+
     def _panel(self, parent, bg=None):
         """Untitled background box for a UI section (no per-widget orange)."""
         return tk.Frame(
@@ -158,8 +172,19 @@ class SerialPortApp:
             bg=bg or UI_PANEL,
             bd=0,
             relief=tk.FLAT,
-            padx=8,
-            pady=6,
+            padx=UI_PAD,
+            pady=UI_PAD,
+        )
+
+    def _blue_box(self, parent):
+        return tk.Frame(
+            parent,
+            bg=UI_HEADER,
+            padx=UI_PAD,
+            pady=UI_PAD,
+            highlightbackground="#000000",
+            highlightthickness=1,
+            highlightcolor="#000000",
         )
 
     def _build_ui(self):
@@ -175,45 +200,27 @@ class SerialPortApp:
         main.rowconfigure(2, weight=0)
         main.rowconfigure(3, weight=0)
 
-        header = tk.Frame(
-            main,
+        title_strip = self._blue_box(main)
+        title_strip.grid(row=0, column=0, sticky="ew", pady=(UI_PAD, UI_PAD), padx=UI_PAD)
+        tk.Label(
+            title_strip,
+            text="Port & Device Identification",
             bg=UI_HEADER,
-            padx=8,
-            pady=2,
-            highlightbackground="#000000",
-            highlightthickness=1,
-            highlightcolor="#000000",
-        )
-        # White gap between orange outer border and this blue box
-        header.grid(row=0, column=0, sticky="ew", pady=(12, 8), padx=14)
-        self._build_status_header(header)
+            fg="#000000",
+            font=self._font_title,
+            anchor="w",
+        ).pack(side=tk.LEFT)
 
-        status_box = tk.Frame(
-            main,
-            bg=UI_HEADER,
-            padx=6,
-            pady=6,
-            highlightbackground="#000000",
-            highlightthickness=1,
-            highlightcolor="#000000",
-        )
-        status_box.grid(row=1, column=0, sticky="nsew", pady=(0, 8), padx=14)
+        status_box = self._blue_box(main)
+        status_box.grid(row=1, column=0, sticky="nsew", pady=(0, UI_PAD), padx=UI_PAD)
         self._build_status_tree(status_box)
 
-        settings_box = tk.Frame(
-            main,
-            bg=UI_HEADER,
-            padx=6,
-            pady=6,
-            highlightbackground="#000000",
-            highlightthickness=1,
-            highlightcolor="#000000",
-        )
-        settings_box.grid(row=2, column=0, sticky="ew", pady=(0, 8), padx=14)
+        settings_box = self._blue_box(main)
+        settings_box.grid(row=2, column=0, sticky="ew", pady=(0, UI_PAD), padx=UI_PAD)
         self._build_port_settings_scaffold(settings_box)
 
-        bottom = tk.Frame(main, bg=UI_BOTTOM, padx=8, pady=6)
-        bottom.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+        bottom = tk.Frame(main, bg=UI_BOTTOM, padx=UI_PAD, pady=UI_PAD)
+        bottom.grid(row=3, column=0, sticky="ew", padx=UI_PAD, pady=(0, UI_PAD))
         self._build_bottom_bar(bottom)
         self._sync_port_selection_ui()
         self._refresh_device_ui(apply_baud=True)
@@ -222,9 +229,13 @@ class SerialPortApp:
             self._set_message_lines(device_text=self._devices_load_error)
 
     def _build_status_tree(self, parent):
-        """Port list in blue box; column titles live in the blue area, aligned to columns."""
+        """Automated box: title + check-buttons, then column titles and the port list."""
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        header = tk.Frame(parent, bg=UI_HEADER)
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, UI_PAD))
+        self._build_status_header(header)
 
         cols = (
             ("Status", "center", 90),
@@ -236,7 +247,7 @@ class SerialPortApp:
 
         # Titles in the blue fill, above the list (not inside Treeview headings)
         self._tree_header = tk.Frame(parent, bg=UI_HEADER)
-        self._tree_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+        self._tree_header.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 2))
         self._tree_header_labels = []
         for i, (name, anchor, _width) in enumerate(cols):
             lbl = tk.Label(
@@ -244,7 +255,7 @@ class SerialPortApp:
                 text=name,
                 bg=UI_HEADER,
                 fg="#000000",
-                font=("Arial", 10, "bold"),
+                font=self._font_label,
                 anchor=anchor,
             )
             lbl.grid(row=0, column=i, sticky="nsew")
@@ -266,13 +277,17 @@ class SerialPortApp:
 
         scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.grid(row=1, column=0, sticky="nsew")
-        scroll.grid(row=1, column=1, sticky="ns")
+        self.tree.grid(row=2, column=0, sticky="nsew")
+        scroll.grid(row=2, column=1, sticky="ns")
         self._tree_scrollbar = scroll
 
-        self._tree_body_font = tkfont.Font(family="Arial", size=10)
-        self._tree_header_font = tkfont.Font(family="Arial", size=10, weight="bold")
-        self._tree_identified_font = tkfont.Font(family="Arial", size=10, weight="bold")
+        self._tree_body_font = tkfont.Font(family=self._font_family, size=9)
+        self._tree_header_font = tkfont.Font(
+            family=self._font_family, size=9, weight="bold"
+        )
+        self._tree_identified_font = tkfont.Font(
+            family=self._font_family, size=9, weight="bold"
+        )
         self.tree.tag_configure("identified", font=self._tree_identified_font)
         self._fixed_tree_cols = ("Status", "Port #", "ID/Baud")
 
@@ -292,6 +307,7 @@ class SerialPortApp:
         if not getattr(self, "tree", None):
             return
         space = self._text_px(" ")  # one space each side
+        cell_pad = 10  # Treeview cell padding the font measure does not include
         try:
             for col in self._fixed_tree_cols:
                 need = self._text_px(col, bold=True)
@@ -299,8 +315,9 @@ class SerialPortApp:
                     vals = self.tree.item(item, "values")
                     idx = self._tree_cols.index(col)
                     if idx < len(vals):
-                        need = max(need, self._text_px(vals[idx]))
-                width = need + 2 * space
+                        # Identified rows render bold; measure that way so Status is not clipped.
+                        need = max(need, self._text_px(vals[idx], bold=True))
+                width = need + 2 * space + cell_pad
                 self.tree.column(col, width=width, minwidth=width, stretch=False)
             self._sync_tree_header_widths()
         except tk.TclError:
@@ -327,7 +344,7 @@ class SerialPortApp:
         cell_bg = bg if bg is not None else UI_PANEL
         cell = tk.Frame(parent, bg=cell_bg)
         cell.pack(side=tk.LEFT, padx=4)
-        btn_font = tkfont.Font(family="Arial", size=8, weight="bold")
+        btn_font = tkfont.Font(family=self._font_family, size=8, weight="bold")
         avg_char = max(btn_font.measure("0"), 1)
         gap_px = btn_font.measure(" ")
         cb = tk.Checkbutton(
@@ -376,13 +393,13 @@ class SerialPortApp:
         cb.lift(btn)
 
     def _build_status_header(self, parent):
-        """Light-blue bar: title left (black); checkbox-on-button controls right-aligned."""
+        """Automated title left; checkbox-on-button controls right-aligned."""
         tk.Label(
             parent,
-            text="UART Connection Status",
+            text="Automated",
             bg=UI_HEADER,
             fg="#000000",
-            font=("Arial", 11, "bold"),
+            font=self._font_title,
             anchor="w",
         ).pack(side=tk.LEFT)
 
@@ -418,24 +435,32 @@ class SerialPortApp:
     ):
         cell_bg = bg if bg is not None else UI_PANEL
         col = tk.Frame(parent, bg=cell_bg)
-        col.pack(side=tk.LEFT, padx=6, anchor="n")
+        col.pack(side=tk.LEFT, padx=UI_PAD, anchor="n")
         tk.Label(
-            col, text=label, bg=cell_bg, fg=UI_FG, font=("Arial", 10, "bold"),
+            col, text=label, bg=cell_bg, fg=UI_FG, font=self._font_label,
             anchor="center",
         ).pack(fill=tk.X)
         state = "normal" if editable else "readonly"
         cb = ttk.Combobox(
-            col, textvariable=var, values=values, width=width, state=state, font=("Arial", 10, "bold")
+            col, textvariable=var, values=values, width=width, state=state, font=self._font_label
         )
         cb.pack(anchor="center")
         return col, cb
 
     def _build_port_settings_scaffold(self, parent):
-        """3rd blue box: Status/Port/Baud/Settings; Device; Open + Identify top-right."""
+        """Manually box: Port/Baud/Settings/Open; Device + Identify. No Status field."""
+        tk.Label(
+            parent,
+            text="Manually",
+            bg=UI_HEADER,
+            fg="#000000",
+            font=self._font_title,
+            anchor="w",
+        ).pack(anchor="w", pady=(0, UI_PAD))
+
         wrap = tk.Frame(parent, bg=UI_HEADER)
         wrap.pack(fill=tk.BOTH, expand=True)
 
-        self.settings_status_var = tk.StringVar(value="None Available")
         self.settings_port_var = tk.StringVar(value=NO_PORTS_LABEL)
         self.settings_baud_var = tk.StringVar(value="115.2K")
         self.settings_device_var = tk.StringVar(value="")
@@ -446,7 +471,7 @@ class SerialPortApp:
 
         # Right: Open / Identify stacked
         right = tk.Frame(wrap, bg=UI_HEADER)
-        right.pack(side=tk.RIGHT, anchor="n", padx=(8, 0))
+        right.pack(side=tk.RIGHT, anchor="n", padx=(UI_PAD, 0))
         self.open_port_button = tk.Button(
             right,
             text="Open:",
@@ -457,7 +482,7 @@ class SerialPortApp:
             anchor="w",
             justify="left",
             relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
+            font=self._font_button,
         )
         self.open_port_button.configure(command=self._on_open_port)
         self.open_port_button.pack(anchor="e", pady=(14, 2))
@@ -471,7 +496,7 @@ class SerialPortApp:
             anchor="w",
             justify="left",
             relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
+            font=self._font_button,
             command=self._on_connection_scan_device,
         )
         self.identify_button.pack(anchor="e")
@@ -483,35 +508,11 @@ class SerialPortApp:
         row1 = tk.Frame(left, bg=UI_HEADER)
         row1.pack(fill=tk.X, anchor="w")
 
-        # Status: display-only text box (not editable)
-        status_col = tk.Frame(row1, bg=UI_HEADER)
-        status_col.pack(side=tk.LEFT, padx=6, anchor="n")
-        tk.Label(
-            status_col,
-            text="Status",
-            bg=UI_HEADER,
-            fg=UI_FG,
-            font=("Arial", 10, "bold"),
-            anchor="center",
-        ).pack(fill=tk.X)
-        self.settings_status_entry = tk.Entry(
-            status_col,
-            textvariable=self.settings_status_var,
-            width=16,
-            font=("Arial", 10, "bold"),
-            relief=tk.SUNKEN,
-            bd=2,
-            state="readonly",
-            readonlybackground="#FFFFFF",
-            fg="#000000",
-        )
-        self.settings_status_entry.pack(anchor="center")
-
         # Port: dropdown + manual entry allowed; no '* Manual Entry *' item
         port_col = tk.Frame(row1, bg=UI_HEADER)
-        port_col.pack(side=tk.LEFT, padx=6, anchor="n")
+        port_col.pack(side=tk.LEFT, padx=UI_PAD, anchor="n")
         tk.Label(
-            port_col, text="Port", bg=UI_HEADER, fg=UI_FG, font=("Arial", 10, "bold"),
+            port_col, text="Port", bg=UI_HEADER, fg=UI_FG, font=self._font_label,
             anchor="center",
         ).pack(fill=tk.X)
         self.settings_port_combo = ttk.Combobox(
@@ -520,7 +521,7 @@ class SerialPortApp:
             values=[NO_PORTS_LABEL],
             width=14,
             state="normal",
-            font=("Arial", 10, "bold"),
+            font=self._font_label,
         )
         self.settings_port_combo.pack(anchor="center")
         self.settings_port_combo.bind(
@@ -540,15 +541,18 @@ class SerialPortApp:
             bg=UI_HEADER,
             editable=True,
         )
+        self.settings_baud_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._mark_port_status_unknown()
+        )
 
         settings_col = tk.Frame(row1, bg=UI_HEADER)
-        settings_col.pack(side=tk.LEFT, padx=6, anchor="n")
+        settings_col.pack(side=tk.LEFT, padx=UI_PAD, anchor="n")
         tk.Label(
             settings_col,
-            text="Port Settings",
+            text="Settings",
             bg=UI_HEADER,
             fg=UI_FG,
-            font=("Arial", 10, "bold"),
+            font=self._font_label,
             anchor="center",
         ).pack(fill=tk.X)
         self.settings_summary = tk.Button(
@@ -562,20 +566,21 @@ class SerialPortApp:
             anchor="w",
             justify="left",
             relief=tk.RAISED,
-            padx=6,
-            font=("Arial", 9, "bold"),
+            padx=UI_PAD,
+            font=self._font_button,
         )
         self.settings_summary.pack(anchor="center")
+        self._size_settings_summary()
         self.settings_summary.bind(
             "<Configure>", self._schedule_device_combo_align
         )
 
         # Device: label left, dropdown right edge matches Settings button
         row2 = tk.Frame(left, bg=UI_HEADER)
-        row2.pack(fill=tk.X, anchor="w", pady=(8, 0))
+        row2.pack(fill=tk.X, anchor="w", pady=(UI_PAD, 0))
         tk.Label(
-            row2, text="Device", bg=UI_HEADER, fg=UI_FG, font=("Arial", 10, "bold")
-        ).pack(side=tk.LEFT, padx=(6, 4))
+            row2, text="Device", bg=UI_HEADER, fg=UI_FG, font=self._font_label
+        ).pack(side=tk.LEFT, padx=(UI_PAD, 4))
         device_names = [label for label, _device in self._device_entries]
         if not device_names:
             device_names = ["(no devices)"]
@@ -589,7 +594,7 @@ class SerialPortApp:
             values=device_names,
             width=1,
             state="readonly",
-            font=("Arial", 10, "bold"),
+            font=self._font_label,
         )
         self.settings_device_combo.pack(fill=tk.BOTH, expand=True)
         self.settings_device_combo.bind(
@@ -609,9 +614,29 @@ class SerialPortApp:
             self.settings_flow_var.get(),
         )
 
+    def _char_width_for_text(self, text, font, extra_px=None):
+        """Tk width= chars so `text` plus padding still fits."""
+        if extra_px is None:
+            extra_px = 2 * UI_PAD
+        avg = max(font.measure("0"), 1)
+        need = font.measure(str(text)) + extra_px
+        return max(4, (need + avg - 1) // avg)
+
+    def _size_settings_summary(self):
+        button = getattr(self, "settings_summary", None)
+        if button is None:
+            return
+        font = tkfont.Font(font=button.cget("font"))
+        button.configure(
+            width=self._char_width_for_text(longest_settings_text(), font)
+        )
+
     def _rebuild_device_entries(self):
         devices = self.device_definitions.get("devices", [])
-        bases = [connected_device_label(item) or "device" for item in devices]
+        bases = []
+        for item in devices:
+            baud = default_baud(item)
+            bases.append(picker_device_label(item, self.format_baud(baud)) or "device")
         self._device_entries = list(zip(unique_device_labels(bases), devices))
 
     def _baud_labels_for_device(self, device):
@@ -734,13 +759,42 @@ class SerialPortApp:
         self._on_select_port()
 
     def _set_message_lines(self, port_text=None, device_text=None):
-        if port_text is not None and getattr(self, "port_message_var", None) is not None:
-            self.port_message_var.set(port_text)
-        if device_text is not None and getattr(self, "device_message_var", None) is not None:
+        port_var = getattr(self, "port_status_var", None) or getattr(
+            self, "port_message_var", None
+        )
+        device_var = getattr(self, "device_status_var", None) or getattr(
+            self, "device_message_var", None
+        )
+        if port_text is not None and port_var is not None:
+            port_var.set(port_text)
+        if device_text is not None and device_var is not None:
             if self._devices_load_error and not self._device_entries:
-                self.device_message_var.set(self._devices_load_error)
+                device_var.set(self._devices_load_error)
             else:
-                self.device_message_var.set(device_text)
+                device_var.set(device_text)
+
+    def _store_bottom_port_status(self, port, status):
+        if port:
+            self._port_bottom_status_by_port[port] = status
+        self._set_message_lines(port_text=status)
+
+    def _show_bottom_port_status(self, port=None):
+        if port is None:
+            port = self._selected_port()
+        status = (
+            self._port_bottom_status_by_port.get(port, PORT_STATUS_CLOSED)
+            if port
+            else PORT_STATUS_CLOSED
+        )
+        self._set_message_lines(port_text=status)
+
+    def _mark_port_status_unknown(self):
+        if self._suppress_port_status_event:
+            return
+        port = self._selected_port()
+        if not port:
+            return
+        self._store_bottom_port_status(port, PORT_STATUS_UNKNOWN)
 
     def _set_identified_device(self, port, device):
         if not port:
@@ -782,7 +836,7 @@ class SerialPortApp:
             port_status=row[0] if row else None,
             held=bool(port and self._held_port == port),
         )
-        self.settings_status_var.set(state["status"])
+        self._show_bottom_port_status(port)
         self._set_combo_enabled(
             getattr(self, "settings_port_combo", None), state["port"], editable=True
         )
@@ -825,9 +879,9 @@ class SerialPortApp:
             "parity": UI_TO_PARITY.get(self.settings_parity_var.get(), "N"),
             "bytesize": int(float(self.settings_data_var.get() or 8)),
             "stopbits": stop_map.get(stop_text, serial.STOPBITS_ONE),
-            "xonxoff": flow == "XON/XOFF",
+            "xonxoff": flow == FLOW_XOFF_XON,
             "rtscts": flow == "RTS/CTS",
-            "dsrdtr": flow == "DSR/DTR",
+            "dsrdtr": False,
         }
 
     def _device_for_label(self, label):
@@ -849,10 +903,12 @@ class SerialPortApp:
         device = self._device_for_label(self.settings_device_var.get())
         if not device:
             self._refresh_baud_dropdown(None, apply_default=False)
+            self._mark_port_status_unknown()
             self._refresh_identified_device_message()
             return
         if self._held_port:
             self._refresh_baud_dropdown(device, apply_default=False)
+            self._mark_port_status_unknown()
             self._refresh_identified_device_message()
             return
         params = device.get("serial_parameters") or {}
@@ -862,10 +918,12 @@ class SerialPortApp:
         self.settings_data_var.set(str(int(float(params.get("bytesize", 8)))))
         stop = params.get("stopbits", 1)
         stop_text = str(int(stop)) if float(stop) == int(float(stop)) else str(stop)
+        if stop_text not in STOP_BITS_CHOICES:
+            stop_text = "1"
         self.settings_stop_var.set(stop_text)
-        flow = params.get("flow_control") or "None"
-        self.settings_flow_var.set(flow if flow in FLOW_CHOICES else "None")
+        self.settings_flow_var.set(normalize_flow_choice(params.get("flow_control")))
         self._refresh_settings_summary()
+        self._mark_port_status_unknown()
         self._refresh_identified_device_message()
 
     def _release_serial(self):
@@ -922,12 +980,12 @@ class SerialPortApp:
             row = self._port_row(port)
             status = "Identified" if row and row[3] else "Available"
             self._set_port_row(port, status=status, keep_device=True)
-            self._set_message_lines(port_text=port_event_message(port, "Closed"))
+            self._store_bottom_port_status(port, PORT_STATUS_CLOSED)
             return
         self._release_serial()
         self._held_port = None
         if not self._reopen_held(port):
-            self._set_message_lines(port_text=f"Port: {port} open failed")
+            self._store_bottom_port_status(port, PORT_STATUS_FAILED)
             return
         settings = self._serial_settings_from_ui()
         self._log(
@@ -935,7 +993,7 @@ class SerialPortApp:
             f"{self._format_settings_summary()}"
         )
         self._set_port_row(port, status="Open", keep_device=True)
-        self._set_message_lines(port_text=port_event_message(port, "Open"))
+        self._store_bottom_port_status(port, PORT_STATUS_OPENED)
 
     def _apply_connection_scan(self, port, found, settings, was_open, device=None):
         if found:
@@ -954,7 +1012,6 @@ class SerialPortApp:
                 device_name=found,
                 baud=settings.get("baudrate"),
             )
-            self._set_message_lines(port_text=port_event_message(port, "Identified"))
             self._refresh_identified_device_message()
         else:
             self._set_identified_device(port, None)
@@ -1109,6 +1166,7 @@ class SerialPortApp:
             self.settings_stop_var.set(stop_var.get())
             self.settings_flow_var.set(flow_var.get())
             self._refresh_settings_summary()
+            self._mark_port_status_unknown()
             close_dialog()
 
         win.protocol("WM_DELETE_WINDOW", close_dialog)
@@ -1121,8 +1179,8 @@ class SerialPortApp:
         blue = tk.Frame(
             inner,
             bg=UI_HEADER,
-            padx=8,
-            pady=6,
+            padx=UI_PAD,
+            pady=UI_PAD,
             highlightbackground="#000000",
             highlightthickness=1,
             highlightcolor="#000000",
@@ -1134,14 +1192,17 @@ class SerialPortApp:
             text="Port Settings",
             bg=UI_HEADER,
             fg="#000000",
-            font=("Arial", 11, "bold"),
+            font=self._font_title,
             anchor="w",
-        ).pack(anchor="w", pady=(0, 6))
+        ).pack(anchor="w", pady=(0, UI_PAD))
 
-        white = tk.Frame(blue, bg=UI_BG, padx=8, pady=8)
+        white = tk.Frame(blue, bg=UI_BG, padx=UI_PAD, pady=UI_PAD)
         white.pack(fill=tk.X)
         white.columnconfigure(0, weight=1)
         white.columnconfigure(1, weight=1)
+
+        def combo_width(values):
+            return max(5, max(len(str(value)) for value in values) + 1)
 
         def labeled_combo(parent, label, var, values, right=False):
             cell = tk.Frame(parent, bg=UI_BG)
@@ -1152,15 +1213,15 @@ class SerialPortApp:
                 text=label,
                 bg=UI_BG,
                 fg=UI_FG,
-                font=("Arial", 10, "bold"),
+                font=self._font_label,
             ).pack(side=tk.LEFT)
             ttk.Combobox(
                 group,
                 textvariable=var,
                 values=values,
-                width=5,
+                width=combo_width(values),
                 state="readonly",
-                font=("Arial", 10, "bold"),
+                font=self._font_label,
             ).pack(side=tk.LEFT, padx=(4, 0))
             return cell
 
@@ -1177,6 +1238,11 @@ class SerialPortApp:
             row=1, column=1, sticky="e", pady=2
         )
 
+        preview_font = tkfont.Font(family=self._font_family, size=9, weight="bold")
+        preview_width = self._char_width_for_text(
+            longest_settings_text(), preview_font
+        )
+
         select_row = tk.Frame(white, bg=UI_BG)
         select_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         tk.Button(
@@ -1189,22 +1255,22 @@ class SerialPortApp:
             anchor="center",
             justify="center",
             relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
+            font=self._font_button,
         ).pack(side=tk.RIGHT)
         tk.Entry(
             select_row,
             textvariable=preview_var,
-            width=22,
-            font=("Arial", 10, "bold"),
+            width=preview_width,
+            font=self._font_label,
             relief=tk.SUNKEN,
             bd=2,
             state="readonly",
             readonlybackground=UI_GREEN,
             fg="#000000",
-        ).pack(side=tk.LEFT, padx=(0, 8))
+        ).pack(side=tk.LEFT, padx=(0, UI_PAD))
 
         bottom = tk.Frame(blue, bg=UI_HEADER)
-        bottom.pack(fill=tk.X, pady=(8, 0))
+        bottom.pack(fill=tk.X, pady=(UI_PAD, 0))
         tk.Button(
             bottom,
             text="Exit",
@@ -1215,19 +1281,19 @@ class SerialPortApp:
             anchor="center",
             justify="center",
             relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
+            font=self._font_button,
         ).pack(side=tk.RIGHT)
         tk.Entry(
             bottom,
             textvariable=applied_var,
-            width=22,
-            font=("Arial", 10, "bold"),
+            width=preview_width,
+            font=self._font_label,
             relief=tk.SUNKEN,
             bd=2,
             state="readonly",
             readonlybackground=UI_CURRENT_SETTINGS,
             fg="#000000",
-        ).pack(side=tk.LEFT, padx=(0, 8))
+        ).pack(side=tk.LEFT, padx=(0, UI_PAD))
 
         win.bind("<Return>", lambda _e: on_select())
         win.bind("<Escape>", lambda _e: close_dialog())
@@ -1244,7 +1310,21 @@ class SerialPortApp:
         win.focus_force()
 
     def _build_bottom_bar(self, parent):
-        """White bar: message lines left; Exit then Select on the right."""
+        """Port Status / Device Status on the left; Select then Exit on the right."""
+        self.exit_button = tk.Button(
+            parent,
+            text="Exit",
+            command=self._on_exit,
+            width=10,
+            bg=UI_BTN_GRAY,
+            activebackground="#A8A8A8",
+            anchor="center",
+            justify="center",
+            relief=tk.RAISED,
+            font=self._font_button,
+        )
+        self.exit_button.pack(side=tk.RIGHT, padx=(UI_PAD, 0))
+
         self.select_button = tk.Button(
             parent,
             text="Select",
@@ -1256,46 +1336,41 @@ class SerialPortApp:
             anchor="center",
             justify="center",
             relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
+            font=self._font_button,
         )
-        self.select_button.pack(side=tk.RIGHT, padx=4)
+        self.select_button.pack(side=tk.RIGHT, padx=(UI_PAD, 0))
 
-        self.exit_button = tk.Button(
-            parent,
-            text="Exit",
-            command=self._on_exit,
-            width=10,
-            bg=UI_BTN_GRAY,
-            activebackground="#A8A8A8",
-            anchor="center",
-            justify="center",
-            relief=tk.RAISED,
-            font=("Arial", 9, "bold"),
-        )
-        self.exit_button.pack(side=tk.RIGHT, padx=4)
+        status_row = tk.Frame(parent, bg=UI_BOTTOM)
+        status_row.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.port_status_var = tk.StringVar(value=PORT_STATUS_CLOSED)
+        self.device_status_var = tk.StringVar(value=DEVICE_STATUS_UNIDENTIFIED)
+        self.port_message_var = self.port_status_var
+        self.device_message_var = self.device_status_var
 
-        messages = tk.Frame(parent, bg=UI_BOTTOM)
-        messages.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 8))
-        self.port_message_var = tk.StringVar(value="")
-        self.device_message_var = tk.StringVar(value="")
-        tk.Label(
-            messages,
-            textvariable=self.port_message_var,
-            bg=UI_BOTTOM,
-            fg=UI_FG,
-            font=("Arial", 10, "bold"),
-            anchor="w",
-            justify="left",
-        ).pack(fill=tk.X)
-        tk.Label(
-            messages,
-            textvariable=self.device_message_var,
-            bg=UI_BOTTOM,
-            fg=UI_FG,
-            font=("Arial", 10, "bold"),
-            anchor="w",
-            justify="left",
-        ).pack(fill=tk.X)
+        def status_group(label, var, width):
+            group = tk.Frame(status_row, bg=UI_BOTTOM)
+            group.pack(side=tk.LEFT, padx=(0, UI_PAD * 2))
+            tk.Label(
+                group,
+                text=label,
+                bg=UI_BOTTOM,
+                fg=UI_FG,
+                font=self._font_label,
+            ).pack(side=tk.LEFT, padx=(0, 4))
+            tk.Entry(
+                group,
+                textvariable=var,
+                width=width,
+                font=self._font_label,
+                relief=tk.SUNKEN,
+                bd=2,
+                state="readonly",
+                readonlybackground="#FFFFFF",
+                fg="#000000",
+            ).pack(side=tk.LEFT)
+
+        status_group("Port Status:", self.port_status_var, 12)
+        status_group("Device Status:", self.device_status_var, 14)
 
     def _on_exit(self):
         self._clear_auto_scans()
@@ -1305,13 +1380,7 @@ class SerialPortApp:
     # ------------------------------------------------------------- helpers
     @staticmethod
     def format_baud(baud):
-        if baud is None:
-            return None
-        try:
-            baud = int(baud)
-        except (TypeError, ValueError):
-            return str(baud)
-        return BAUD_SHORT_BY_VALUE.get(baud, str(baud))
+        return format_baud_label(baud)
 
     def _id_baud_column(self, status, vendor_id, baud):
         """Port ID when no device; baud used to connect when Identified."""
@@ -1326,7 +1395,7 @@ class SerialPortApp:
 
     @staticmethod
     def _connected_device_label(device):
-        """Dropdown name: Manufacturer model [- long_description]."""
+        """Identity name: Manufacturer model [- long_description]."""
         return connected_device_label(device)
 
     @staticmethod
@@ -1389,7 +1458,7 @@ class SerialPortApp:
             else:
                 self._sync_port_selection_ui()
             if not self.port_data:
-                self._set_message_lines(port_text=port_event_message(None, "Closed"))
+                self._show_bottom_port_status(None)
                 self._refresh_identified_device_message()
             return
         self.settings_port_combo["values"] = ports
@@ -1522,6 +1591,11 @@ class SerialPortApp:
         self._identified_device_by_port = {
             port: device
             for port, device in self._identified_device_by_port.items()
+            if port in known_ports
+        }
+        self._port_bottom_status_by_port = {
+            port: status
+            for port, status in self._port_bottom_status_by_port.items()
             if port in known_ports
         }
         self.update_ports_from_data()

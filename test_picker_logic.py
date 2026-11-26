@@ -2,20 +2,34 @@
 
 import unittest
 
+from device_data import STANDARD_BAUD_RATES
 from picker_logic import (
+    BAUD_SHORT,
+    DATA_BITS_CHOICES,
     DEFAULT_PARITY,
+    DEVICE_STATUS_IDENTIFIED,
+    DEVICE_STATUS_UNIDENTIFIED,
+    FLOW_CHOICES,
+    FLOW_XOFF_XON,
+    PARITY_CHOICES,
+    STOP_BITS_CHOICES,
     UNKNOWN_DEVICE_MESSAGE,
     apply_header_button_click,
     check_button_char_width,
     device_identity_key,
     device_message_text,
+    device_status_text,
     dropdown_ports,
+    format_baud_label,
     format_settings_text,
     format_vid_pid,
     identified_device_message,
+    longest_settings_text,
     natural_port_sort_key,
+    normalize_flow_choice,
     open_button_text,
     picker_control_state,
+    picker_device_label,
     port_event_message,
     port_status_text,
     unique_device_labels,
@@ -81,8 +95,12 @@ class SettingsTextTests(unittest.TestCase):
             "8 - 1 - None - None",
         )
         self.assertEqual(
-            format_settings_text("7", "2", "Even", "XON/XOFF"),
-            "7 - 2 - Even - XON/XOFF",
+            format_settings_text("7", "2", "Even", FLOW_XOFF_XON),
+            "7 - 2 - Even - xOff/xOn",
+        )
+        self.assertEqual(
+            format_settings_text("8", "1", "Space", "RTS/CTS"),
+            "8 - 1 - Space - RTS/CTS",
         )
 
     def test_default_parity_is_none(self):
@@ -157,7 +175,7 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         )
         self.assertEqual(
             identified_device_message(self.mb607, self.mb607),
-            "Device: MUX Wiring MB607 Body Control Module",
+            DEVICE_STATUS_IDENTIFIED,
         )
 
     def test_other_dropdown_or_other_port_resets_until_that_result_matches(self):
@@ -171,7 +189,18 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         )
         self.assertEqual(
             identified_device_message(self.sim, self.sim),
-            "Device: SIMCom SIM7080",
+            DEVICE_STATUS_IDENTIFIED,
+        )
+
+    def test_device_status_is_unidentified_until_confirmed(self):
+        self.assertEqual(UNKNOWN_DEVICE_MESSAGE, DEVICE_STATUS_UNIDENTIFIED)
+        self.assertEqual(
+            device_status_text(None, self.mb607),
+            DEVICE_STATUS_UNIDENTIFIED,
+        )
+        self.assertEqual(
+            device_status_text(self.mb607, self.mb607),
+            DEVICE_STATUS_IDENTIFIED,
         )
 
     def test_identity_key_is_manufacturer_and_model(self):
@@ -305,6 +334,56 @@ class CheckButtonWidthTests(unittest.TestCase):
     def test_zero_checkbox_still_fits_the_label(self):
         self.assertEqual(check_button_char_width(21, 0, 0, 7, extra_pad_px=0), 4)
         self.assertEqual(check_button_char_width(7, 0, 0, 7, extra_pad_px=0), 4)
+
+
+class SlideOptionListTests(unittest.TestCase):
+    def test_data_stop_parity_flow_match_slide_3(self):
+        self.assertEqual(DATA_BITS_CHOICES, ("8", "7", "6", "5"))
+        self.assertEqual(STOP_BITS_CHOICES, ("1", "2"))
+        self.assertEqual(PARITY_CHOICES, ("None", "Odd", "Even", "Mark", "Space"))
+        self.assertEqual(FLOW_CHOICES, ("None", "RTS/CTS", "xOff/xOn"))
+        self.assertNotIn("1.5", STOP_BITS_CHOICES)
+        self.assertNotIn("DSR/DTR", FLOW_CHOICES)
+        self.assertNotIn("XON/XOFF", FLOW_CHOICES)
+
+    def test_typical_speeds_drop_600(self):
+        values = [value for value, _label in BAUD_SHORT]
+        self.assertNotIn(600, values)
+        self.assertEqual(values[0], 300)
+        self.assertEqual(values[1], 1200)
+        self.assertEqual(format_baud_label(115200), "115.2K")
+        self.assertEqual(format_baud_label(460800), "460.8K")
+        self.assertEqual(format_baud_label(600), "600")
+        self.assertEqual(tuple(value for value, _label in BAUD_SHORT), STANDARD_BAUD_RATES)
+
+    def test_flow_aliases_map_to_xoff_xon(self):
+        self.assertEqual(normalize_flow_choice("xOff/xOn"), "xOff/xOn")
+        self.assertEqual(normalize_flow_choice("XON/XOFF"), "xOff/xOn")
+        self.assertEqual(normalize_flow_choice("DSR/DTR"), "None")
+        self.assertEqual(normalize_flow_choice(None), "None")
+
+    def test_longest_settings_fits_space_and_xoff_xon(self):
+        longest = longest_settings_text()
+        self.assertEqual(longest, "8 - 1 - Space - xOff/xOn")
+        self.assertGreaterEqual(len(longest), len("8 - 1 - Space - RTS/CTS"))
+
+    def test_device_dropdown_uses_slide_format(self):
+        mb607 = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+        }
+        self.assertEqual(
+            picker_device_label(mb607, "115.2K"),
+            "MUX Wiring  MB607  115.2K Baud",
+        )
+        self.assertEqual(
+            picker_device_label(
+                {"manufacturer": "SIMCom", "model": "SIM7080"},
+                "115.2K",
+            ),
+            "SIMCom  SIM7080  115.2K Baud",
+        )
 
 
 if __name__ == "__main__":

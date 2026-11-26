@@ -390,6 +390,7 @@ class BaudDropdownTests(unittest.TestCase):
         self.assertEqual(app._baud_labels_for_device(_device_by_model("SIM7080")), ["115.2K"])
         standard = app._baud_labels_for_device(None)
         self.assertEqual(standard[0], "300")
+        self.assertNotIn("600", standard)
         self.assertIn("115.2K", standard)
         self.assertIn("921.6K", standard)
 
