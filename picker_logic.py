@@ -64,7 +64,7 @@ PORT_STATUS_OPENED = "Opened"
 PORT_STATUS_FAILED = "Failed"
 PORT_STATUS_UNKNOWN = "Unknown"
 
-DEVICE_STATUS_UNIDENTIFIED = "Unidentified"
+DEVICE_STATUS_UNIDENTIFIED = "Nothing Identified"
 DEVICE_STATUS_IDENTIFIED = "Identified"
 
 BAUD_SHORT = [
@@ -161,6 +161,7 @@ IDENTIFY_ERROR_PREVIEW = 40
 IDENTIFY_MATCHED = "Matched"
 IDENTIFY_NO_RESPONSE = "No response"
 IDENTIFY_SKIPPED_VID_PID = "Skipped, port ID doesn't match"
+SCAN_SKIPPED_OPEN = "Skipped, port is Open"
 SCAN_NO_USB_ID = "no USB ID"
 SCAN_ANY_ID = "any"
 DEVICE_SCANNING = "Device Scanning..."
@@ -641,8 +642,9 @@ def bottom_port_status_text(
         return f"{name} {baud_text} {frame}"
     return name
 
-# Values the Device Status box must fully show. Unidentified is the longest
-# of these; 10th/11th/21st-style failures are close behind.
+# Values the Device Status box must fully show. Nothing Identified is the
+# longest of these status words; catalog Identified labels (with optional
+# appended response text) are passed in as extra samples and are longer.
 DEVICE_STATUS_VALUE_SAMPLES = (
     DEVICE_STATUS_UNIDENTIFIED,
     DEVICE_STATUS_IDENTIFIED,
@@ -789,11 +791,11 @@ def device_status_text(
     fail_key=None,
     identified_label=None,
 ):
-    """Bottom Device Status. Unidentified until Identify or Scan Devices confirms.
+    """Bottom Device Status. Nothing Identified until Identify or Scan confirms.
 
     When confirmed, identified_label is the same Connected Device column text
-    (identified_connected_label). Other states stay Unidentified / failure
-    ordinals.
+    (identified_connected_label). Other states stay Nothing Identified /
+    failure ordinals.
     """
     identified_key = device_identity_key(identified_device)
     selected_key = device_identity_key(selected_device)
@@ -812,7 +814,7 @@ def identified_device_message(
     fail_key=None,
     identified_label=None,
 ):
-    """Bottom Device Status value. Unidentified until this port matches the dropdown device."""
+    """Bottom Device Status value. Nothing Identified until this port matches the dropdown device."""
     return device_status_text(
         identified_device,
         selected_device,

@@ -30,7 +30,8 @@
       },
       "response": {
         "regex": "SIMCOM_(?P<model>SIM7080)",
-        "device_column": "{manufacturer} {model}"
+        "device_column": "{manufacturer} {model}",
+        "append_response": false
       }
     },
     {
@@ -68,7 +69,8 @@
       },
       "response": {
         "regex": "RevP(?P<revision>\\d+\\.\\d+)\\s+(?P<date>\\d+/\\d+/\\d+)",
-        "device_column": "Revision {revision}"
+        "device_column": "Revision {revision}",
+        "append_response": true
       }
     },
     {
@@ -101,7 +103,8 @@
       },
       "response": {
         "regex": "(?P<manufacturer>Rohde & Schwarz), (?P<model>HMP4040), (?P<serial>\\d+), (?P<firmware>\\d+\\.\\d+)",
-        "device_column": "{manufacturer} {model} (S/N: {serial}, FW: {firmware})"
+        "device_column": "{manufacturer} {model} (S/N: {serial}, FW: {firmware})",
+        "append_response": false
       }
     },
     {
@@ -134,7 +137,8 @@
       },
       "response": {
         "regex": "",
-        "device_column": "{manufacturer} {model}"
+        "device_column": "{manufacturer} {model}",
+        "append_response": false
       }
     }
   ]

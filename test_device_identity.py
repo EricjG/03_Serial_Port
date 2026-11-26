@@ -51,6 +51,7 @@ from picker_logic import (  # noqa: E402
     DEVICE_SCAN_DONE,
     DEVICE_SCANNING,
     DEVICE_STATUS_UNIDENTIFIED,
+    SCAN_SKIPPED_OPEN,
     FLOW_CHOICES,
     MODE_AUTOMATIC,
     MODE_MANUAL,
@@ -218,6 +219,8 @@ class DevicesJsonLoadTests(unittest.TestCase):
             self.assertIn("pause_ms", device["commands"]["identify"])
             self.assertIn("regex", device["response"])
             self.assertIn("device_column", device["response"])
+            self.assertIn("append_response", device["response"])
+            self.assertIsInstance(device["response"]["append_response"], bool)
 
     def test_response_regexes_compile(self):
         for device in _load_definitions()["devices"]:
@@ -328,14 +331,23 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
 
     def test_identified_column_shows_device_not_usb_driver(self):
         app = _bare_app()
+        app.serial_ports = {"serial_ports": []}
+        app.devices_info = {"devices": []}
         usb = "CP210x USB to UART Bridge Controller"
+        mb607 = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "short_description": "Body Control Module",
+            "response": {"append_response": False},
+        }
         self.assertEqual(
             app._driver_or_device_column(
                 "Identified",
-                "MUX Wiring MB607 - BCM with 7-Inputs 6-Outputs & CAN bus",
+                "Revision 1.01",
                 usb,
+                identified_device=mb607,
             ),
-            "MUX Wiring MB607 - BCM with 7-Inputs 6-Outputs & CAN bus",
+            "MUX Wiring MB607 Body Control Module",
         )
         self.assertEqual(app._driver_or_device_column("Available", None, usb), usb)
         self.assertEqual(app._driver_or_device_column("In Use", None, usb), usb)
@@ -395,7 +407,7 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
                 "0x10C4:0xEA60",
                 mb607,
             ),
-            "MUX Wiring MB607 Body Control Module",
+            "MUX Wiring MB607 Body Control Module - Revision 1.23 01/15/24",
         )
 
     def test_identified_device_status_matches_connected_device_column(self):
@@ -408,7 +420,6 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
         cases = (
             (mb607, "Revision 1.23 01/15/24", "CP210x USB to UART Bridge Controller"),
             (sim, "SIMCom SIM7080", "FTDI"),
-            (None, "Revision 1.0 01/01/26", "CP210x USB to UART Bridge Controller"),
         )
         for device, column, usb in cases:
             connected = app._driver_or_device_column(
@@ -429,11 +440,14 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
             )
         self.assertEqual(
             app._identified_connected_text(mb607, "Revision 1.23 01/15/24"),
-            "MUX Wiring MB607 Body Control Module",
+            "MUX Wiring MB607 Body Control Module - Revision 1.23 01/15/24",
         )
         self.assertEqual(
             app._identified_connected_text(sim, "SIMCom SIM7080"),
             "SIMCom SIM7080",
+        )
+        self.assertIsNone(
+            app._identified_connected_text(None, "Revision 1.0 01/01/26"),
         )
 
     def test_device_status_size_samples_include_catalog_labels(self):
@@ -445,8 +459,10 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIsNone(info_error)
         samples = app._device_status_size_samples()
-        self.assertIn("MUX Wiring MB607 Body Control Module", samples)
-        self.assertIn("Unidentified", samples)
+        self.assertIn(
+            "MUX Wiring MB607 Body Control Module - Revision 1.01", samples
+        )
+        self.assertIn("Nothing Identified", samples)
         self.assertIn("Identified", samples)
         self.assertIn("Unknown Device", samples)
         baseline = device_status_size_samples()
@@ -458,6 +474,7 @@ class IdBaudColumnTests(unittest.TestCase):
     def test_identified_shows_short_baud_not_vendor_id(self):
         app = _bare_app()
         self.assertEqual(app._id_baud_column("Identified", "4292", 460800), "460.8K")
+        self.assertEqual(app._id_baud_column("Open", "4292", 460800), "460.8K")
         self.assertEqual(app._id_baud_column("Identified", "1027", 115200), "115.2K")
         self.assertEqual(app._id_baud_column("Identified", "1234", 9600), "9.6K")
 
@@ -941,6 +958,166 @@ class ScanLogLayoutTests(FakeSerialTests):
         self.assertEqual(logs[0], "Port: COM9 (no USB ID)")
         self.assertEqual(logs[1], "Device: Any Box 9600 8N1 (any): Matched")
 
+    def test_open_port_gets_header_and_is_not_identified(self):
+        sim = _device_by_model("SIM7080")
+        mb607 = _device_by_model("MB607")
+        open_row = (
+            "Open",
+            "COM8",
+            "0x10C4:0xEA60",
+            "Revision 1.01",
+            "CP210x",
+            115200,
+        )
+        p8 = MagicMock(device="COM8", vid=0x10C4, pid=0xEA60)
+        app = self._scan_app(
+            [open_row],
+            {"devices": [sim, mb607]},
+            [p8],
+        )
+        app._held_port = "COM8"
+        app._identified_device_by_port = {"COM8": mb607}
+        app._identify_device_with_defs = MagicMock(
+            side_effect=AssertionError("Open port must not be identified")
+        )
+        FakeSerial.response = b"HELLO"
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ):
+            app._scan_devices_worker()
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM8 (0x10C4/0xEA60)")
+        self.assertEqual(logs[1], f"  {SCAN_SKIPPED_OPEN}")
+        self.assertEqual(logs[-1], DEVICE_SCAN_DONE)
+        app._identify_device_with_defs.assert_not_called()
+        self.assertEqual(app.port_data[0], open_row)
+
+
+class OpenPortScanSkipTests(unittest.TestCase):
+    """Open ports are never probed; each scan path logs Skipped, port is Open."""
+
+    def _open_row(self):
+        return (
+            "Open",
+            "COM8",
+            "0x10C4:0xEA60",
+            "Revision 1.01",
+            "CP210x",
+            115200,
+        )
+
+    def _open_app(self, *, comports=None):
+        mb607 = _device_by_model("MB607")
+        port = MagicMock(device="COM8", vid=0x10C4, pid=0xEA60)
+        comports = comports if comports is not None else [port]
+        by_device = {p.device: p for p in comports}
+        app = _bare_app()
+        app._log = MagicMock()
+        app._log_cont = MagicMock()
+        app.root = MagicMock()
+        app.root.after.side_effect = lambda _delay, fn: fn()
+        app.port_data = [self._open_row()]
+        app.known_ports = {p.device for p in comports}
+        app.device_definitions = {"devices": [mb607]}
+        app._held_port = "COM8"
+        app._identified_device_by_port = {"COM8": mb607}
+        app._port_bottom_status_by_port = {}
+        app._comports_by_device = MagicMock(return_value=(comports, by_device))
+        app._identify_device_with_defs = MagicMock(
+            side_effect=AssertionError("Open port must not be identified")
+        )
+        app.is_port_available = MagicMock(
+            side_effect=AssertionError("Open port must not be probed")
+        )
+        app.update_ports_from_data = MagicMock()
+        app._refresh_settings_port_list = MagicMock()
+        app._refresh_identified_device_message = MagicMock()
+        app._refresh_device_ui = MagicMock()
+        app._finish_port_scan = MagicMock()
+        app._finish_device_scan = MagicMock()
+        app._finish_retest_scan = MagicMock()
+        app._port_scan_lock = MagicMock()
+        app._port_scan_lock.locked.return_value = False
+        app._device_scan_lock = MagicMock()
+        app._device_scan_lock.locked.return_value = False
+        app._device_scan_after_port = False
+        app._device_scan_running = False
+        app.device_scan_var = _Flag(False)
+        app.auto_port_scan_var = _Flag(False)
+        app._devices_load_error = None
+        app._serial_ports_error = None
+        app._devices_info_error = None
+        return app
+
+    def test_scan_devices_worker_skips_open_and_does_not_identify(self):
+        app = self._open_app()
+        before = list(app.port_data)
+        app._scan_devices_worker()
+        app._identify_device_with_defs.assert_not_called()
+        app.is_port_available.assert_not_called()
+        self.assertEqual(app.port_data, before)
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM8 (0x10C4/0xEA60)")
+        self.assertEqual(logs[1], f"  {SCAN_SKIPPED_OPEN}")
+
+    def test_scan_ports_worker_skips_open_and_does_not_probe(self):
+        app = self._open_app()
+        app._port_scan_full = True
+        before = list(app.port_data)
+        identified = dict(app._identified_device_by_port)
+        app._scan_ports_worker()
+        app.is_port_available.assert_not_called()
+        app._identify_device_with_defs.assert_not_called()
+        self.assertEqual(app.port_data, before)
+        self.assertEqual(app.port_data[0][0], "Open")
+        self.assertEqual(app.port_data[0][3], "Revision 1.01")
+        self.assertEqual(app._identified_device_by_port, identified)
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM8 (0x10C4/0xEA60)")
+        self.assertEqual(logs[1], f"  {SCAN_SKIPPED_OPEN}")
+
+    def test_retest_ports_worker_skips_open_and_does_not_identify(self):
+        app = self._open_app()
+        before = list(app.port_data)
+        identified = dict(app._identified_device_by_port)
+        app._retest_ports_worker()
+        app._identify_device_with_defs.assert_not_called()
+        app.is_port_available.assert_not_called()
+        self.assertEqual(app.port_data, before)
+        self.assertEqual(app.port_data[0][0], "Open")
+        self.assertEqual(app.port_data[0][3], "Revision 1.01")
+        self.assertEqual(app._identified_device_by_port, identified)
+        logs = _logged(app._log_cont)
+        self.assertEqual(logs[0], "Port: COM8 (0x10C4/0xEA60)")
+        self.assertEqual(logs[1], f"  {SCAN_SKIPPED_OPEN}")
+        self.assertFalse(any("held open" in line for line in logs))
+
+    def test_scan_devices_identifies_available_but_not_open(self):
+        app = self._open_app(
+            comports=[
+                MagicMock(device="COM8", vid=0x10C4, pid=0xEA60),
+                MagicMock(device="COM3", vid=0x0403, pid=0x6001),
+            ]
+        )
+        app.port_data = [
+            self._open_row(),
+            ("Available", "COM3", "0x0403:0x6001", None, "FTDI", None),
+        ]
+        app.known_ports = {"COM8", "COM3"}
+        calls = []
+
+        def identify(port, *args, **kwargs):
+            calls.append(port)
+            return None, None, None
+
+        app._identify_device_with_defs = identify
+        app._scan_devices_worker()
+        self.assertEqual(calls, ["COM3"])
+        logs = _logged(app._log_cont)
+        self.assertIn(f"  {SCAN_SKIPPED_OPEN}", logs)
+        self.assertEqual(app.port_data[0][0], "Open")
+        self.assertEqual(app.port_data[0][3], "Revision 1.01")
+
 
 def _standard_baud_labels():
     return [
@@ -1020,7 +1197,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._refresh_settings_summary.assert_not_called()
         app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=False)
         self.assertEqual(app._identify_fail_count, 0)
-        app.device_status_var.set.assert_called_with("Unidentified")
+        app.device_status_var.set.assert_called_with("Nothing Identified")
 
     def test_identified_refresh_sets_connected_device_label(self):
         app = _bare_app()
@@ -1062,8 +1239,11 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         )
         app._refresh_identified_device_message()
         app.device_status_var.set.assert_called_with(column)
-        self.assertEqual(column, "MUX Wiring MB607 Body Control Module")
+        self.assertEqual(
+            column, "MUX Wiring MB607 Body Control Module - Revision 1.23 01/15/24"
+        )
         self.assertNotEqual(column, DEVICE_STATUS_UNIDENTIFIED)
+        self.assertNotEqual(column, "Revision 1.23 01/15/24")
 
         app.settings_device_var.get.return_value = "SIMCom  SIM7080  115.2K Baud"
         app._device_entries = [
@@ -1072,6 +1252,72 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         ]
         app._refresh_identified_device_message()
         app.device_status_var.set.assert_called_with(DEVICE_STATUS_UNIDENTIFIED)
+
+    def test_manual_open_keeps_identified_device_label(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app.serial_ports = {"serial_ports": []}
+        app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
+        self.assertIsNone(error)
+        app.port_data = [
+            (
+                "Identified",
+                "COM8",
+                "0x10C4:0xEA60",
+                "Revision 1.01",
+                "CP210x",
+                115200,
+            )
+        ]
+        app._identified_device_by_port = {"COM8": mb607}
+        app._held_port = None
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM8"
+        app._release_serial = MagicMock()
+        app._reopen_held = MagicMock(return_value=True)
+        app._serial_settings_from_ui = MagicMock(
+            return_value={
+                "baudrate": 115200,
+                "bytesize": 8,
+                "parity": "N",
+                "stopbits": 1,
+            }
+        )
+        app._format_settings_summary = MagicMock(return_value="8N1 - No Flow")
+        app._log = MagicMock()
+        app.update_ports_from_data = MagicMock()
+        app._sync_port_selection_ui = MagicMock()
+        app._store_bottom_port_status = MagicMock()
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.device_status_var = MagicMock()
+        app.port_status_var = MagicMock()
+        app.device_message_var = app.device_status_var
+        app.port_message_var = app.port_status_var
+
+        SerialPortApp._on_open_port(app)
+
+        row = app._port_row("COM8")
+        self.assertEqual(row[0], "Open")
+        self.assertEqual(row[3], "Revision 1.01")
+        self.assertEqual(row[5], 115200)
+        self.assertIs(app._identified_device_by_port["COM8"], mb607)
+        connected = app._driver_or_device_column(
+            "Open",
+            row[3],
+            "CP210x",
+            "0x10C4:0xEA60",
+            mb607,
+        )
+        self.assertEqual(
+            connected,
+            "MUX Wiring MB607 Body Control Module - Revision 1.01",
+        )
+        self.assertNotEqual(connected, "Revision 1.01")
+        app._refresh_identified_device_message()
+        app.device_status_var.set.assert_called_with(connected)
 
     def test_port_status_click_identify_open_and_fail_text(self):
         app = _bare_app()
@@ -1467,6 +1713,24 @@ class DeviceEditorLoadTests(unittest.TestCase):
         editor.load_device_details()
         vid_field.insert.assert_called_with(0, "0x10C4:0xEA60, 0x067B:0x2303")
 
+    def test_load_device_details_sets_append_response_checkbox(self):
+        editor = self._editor(str(DEVICES_JSON))
+        editor.devices = editor.load_devices()
+        editor.device_dropdown = MagicMock()
+        editor.device_dropdown.current.return_value = 1  # MB607
+        editor.append_response_var = MagicMock()
+        editor.fields = {
+            "Manufacturer": MagicMock(),
+            "Model": MagicMock(),
+            PORT_VID_PID_LABEL: MagicMock(),
+            "Response Regex": MagicMock(),
+        }
+        editor.load_device_details()
+        editor.append_response_var.set.assert_called_with(True)
+        editor.device_dropdown.current.return_value = 0  # SIM7080
+        editor.load_device_details()
+        editor.append_response_var.set.assert_called_with(False)
+
     def test_missing_file_or_key_returns_empty_list(self):
         self.assertEqual(
             self._editor(str(ROOT / "no_such_devices.json")).load_devices(),
@@ -1515,7 +1779,10 @@ class DeviceEditorLoadTests(unittest.TestCase):
         editor.fields["Identify Command"].get.return_value = "''"
         editor.fields["Identify Pause"].get.return_value = "1"
         editor.fields["Response Regex"].get.return_value = ""
+        editor.append_response_var = MagicMock()
+        editor.append_response_var.get.return_value = True
         editor.save_changes()
+        self.assertTrue(devices[0]["response"]["append_response"])
         self.assertEqual(
             devices[0]["controllers"],
             parse_controllers_text("0403:6001, 10C4"),

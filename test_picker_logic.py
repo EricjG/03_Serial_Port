@@ -9,6 +9,7 @@ from picker_logic import (
     DEFAULT_PARITY,
     DEVICE_STATUS_IDENTIFIED,
     DEVICE_STATUS_UNIDENTIFIED,
+    SCAN_SKIPPED_OPEN,
     FLOW_CHOICES,
     FLOW_XOFF_XON,
     PARITY_CHOICES,
@@ -696,7 +697,7 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(grid_ceil_px(1, 8), 8)
         self.assertEqual(grid_ceil_px(64, 8), 64)
         self.assertEqual(grid_ceil_px(65, 8), 72)
-        # Unidentified at 80px + padx 4*2 + outline 1*2 + 8px slack = 98 → 104
+        # Nothing Identified at 80px + padx 4*2 + outline 1*2 + 8px slack = 98 → 104
         self.assertEqual(
             status_value_width_px(80, padx=4, border=0, highlight=1, grid=8, slack=8),
             104,
@@ -726,7 +727,7 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         samples = device_status_size_samples()
         self.assertEqual(longest_device_status_text(), max(samples, key=len))
         self.assertGreaterEqual(len(longest_device_status_text()), len("Identified"))
-        self.assertGreaterEqual(len(longest_device_status_text()), len("Unidentified"))
+        self.assertGreaterEqual(len(longest_device_status_text()), len("Nothing Identified"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("10th Failure"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("11th Failure"))
         self.assertEqual(
@@ -740,7 +741,7 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
             len("COM256 - Failed to open"),
         )
         for word in (
-            "Unidentified",
+            "Nothing Identified",
             "Identified",
             "3rd Failure",
             "Unknown Device",
@@ -751,7 +752,7 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         label = "MUX Wiring MB607 Body Control Module"
         samples = device_status_size_samples(label)
         self.assertIn(label, samples)
-        self.assertIn("Unidentified", samples)
+        self.assertIn("Nothing Identified", samples)
         self.assertIn("Identified", samples)
         self.assertEqual(longest_device_status_text(label), label)
 
@@ -924,6 +925,7 @@ class IdentifyAttemptMessageTests(unittest.TestCase):
             identify_attempt_result(skipped_vid_pid=True),
             "Skipped, port ID doesn't match",
         )
+        self.assertEqual(SCAN_SKIPPED_OPEN, "Skipped, port is Open")
         self.assertEqual(identify_attempt_result(matched=True), "Matched")
         self.assertEqual(identify_attempt_result(reply=""), "No response")
         self.assertEqual(identify_attempt_result(reply=None), "No response")

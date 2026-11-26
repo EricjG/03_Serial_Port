@@ -31,6 +31,8 @@ from device_data import (
     parse_controllers_text,
     parse_usb_id,
     parse_vid_pid,
+    response_append_enabled,
+    sample_device_column,
     scan_controller_ids,
     uart_ic_label,
 )
@@ -137,6 +139,23 @@ class MigrateOldSchemaTests(unittest.TestCase):
         again, error = migrate_device(first)
         self.assertIsNone(error)
         self.assertEqual(first, again)
+
+    def test_append_response_defaults_false_and_keeps_true(self):
+        missing, error = migrate_device({"model": "X"})
+        self.assertIsNone(error)
+        self.assertFalse(missing["response"]["append_response"])
+        self.assertFalse(response_append_enabled(missing))
+        flagged, error = migrate_device(
+            {"model": "Y", "response": {"regex": "X", "append_response": True}}
+        )
+        self.assertIsNone(error)
+        self.assertTrue(flagged["response"]["append_response"])
+        self.assertTrue(response_append_enabled(flagged))
+        self.assertFalse(
+            migrate_device({"response": {"append_response": "false"}})[0][
+                "response"
+            ]["append_response"]
+        )
 
 
 class LoadFileTests(unittest.TestCase):
@@ -577,9 +596,18 @@ class DevicesInfoFileTests(unittest.TestCase):
             identified_connected_label(info, device, "Revision 1.0 01/01/26"),
             "MUX Wiring MB607 Body Control Module",
         )
-        self.assertEqual(
+        self.assertIsNone(
             identified_connected_label(None, None, "Revision 1.0 01/01/26"),
-            "Revision 1.0 01/01/26",
+        )
+        appended = dict(device)
+        appended["response"] = {"append_response": True, "device_column": "Revision {revision}"}
+        self.assertEqual(
+            identified_connected_label(info, appended, "Revision 1.01"),
+            "MUX Wiring MB607 Body Control Module - Revision 1.01",
+        )
+        self.assertEqual(
+            identified_connected_label(info, appended, ""),
+            "MUX Wiring MB607 Body Control Module",
         )
 
     def test_catalog_identified_labels_cover_shipped_files(self):
@@ -588,14 +616,28 @@ class DevicesInfoFileTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertIsNone(info_error)
         labels = catalog_identified_labels(devices, info)
-        self.assertIn("MUX Wiring MB607 Body Control Module", labels)
+        self.assertIn(
+            "MUX Wiring MB607 Body Control Module - Revision 1.01", labels
+        )
+        self.assertNotIn("MUX Wiring MB607 Body Control Module", labels)
         self.assertIn("SIMCom SIM7080", labels)
+        self.assertNotIn("Revision 1.01", labels)
         self.assertTrue(labels)
         self.assertEqual(len(labels), len(set(labels)))
         self.assertGreaterEqual(
             max(len(text) for text in labels),
-            len("MUX Wiring MB607 Body Control Module"),
+            len("MUX Wiring MB607 Body Control Module - Revision 1.01"),
         )
+        mb607 = next(d for d in devices["devices"] if d["model"] == "MB607")
+        self.assertTrue(mb607["response"]["append_response"])
+        self.assertEqual(sample_device_column(mb607), "Revision 1.01")
+        for device in devices["devices"]:
+            if device["model"] == "MB607":
+                continue
+            self.assertFalse(
+                device["response"]["append_response"],
+                msg=device["model"],
+            )
 
 
 if __name__ == "__main__":

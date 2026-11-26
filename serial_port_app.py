@@ -68,6 +68,7 @@ from picker_logic import (
     DEVICE_SCANNING,
     DEVICE_SCAN_DONE,
     SCAN_ANY_ID,
+    SCAN_SKIPPED_OPEN,
     device_status_size_samples,
     grid_ceil_px,
     longest_settings_text,
@@ -1848,6 +1849,7 @@ class SerialPortApp:
             f"Opened {port} @ {settings['baudrate']} "
             f"{self._format_settings_summary()}"
         )
+        # Status only. Keep any Identified device name / Device Status as-is.
         self._set_port_row(port, status="Open", keep_device=True)
         self._store_bottom_port_status(
             port,
@@ -2034,6 +2036,16 @@ class SerialPortApp:
 
     def _log_port_header(self, port, vendor_id=None, product_id=None):
         self._scan_print(format_port_scan_header(port, vendor_id, product_id))
+
+    def _is_held_open_port(self, port, status=None):
+        """True when this app has the port Open (held handle or Open row)."""
+        if port and port == getattr(self, "_held_port", None):
+            return True
+        return status == "Open"
+
+    def _log_skipped_open(self, port, vendor_id=None, product_id=None):
+        self._log_port_header(port, vendor_id, product_id)
+        self._log_cont(f"  {SCAN_SKIPPED_OPEN}")
 
     def _log_identify_attempt(
         self,
@@ -2328,8 +2340,8 @@ class SerialPortApp:
         return format_baud_label(baud)
 
     def _id_baud_column(self, status, vendor_id, baud):
-        """Port ID when no device; baud used to connect when Identified."""
-        if status == "Identified" and baud is not None:
+        """Port ID when no device; baud used to connect when Identified / Open."""
+        if baud is not None and status in ("Identified", "Open"):
             return self.format_baud(baud)
         return vendor_id if vendor_id else "Unknown"
 
@@ -2341,12 +2353,11 @@ class SerialPortApp:
     def _driver_or_device_column(
         self, status, device_name, description, vendor_id=None, identified_device=None
     ):
-        if status == "Identified":
+        """Connected Device text. Identified device info survives Open."""
+        if identified_device or status == "Identified":
             label = self._identified_connected_text(identified_device, device_name)
             if label:
                 return label
-            if device_name:
-                return device_name
         chip = uart_ic_label(match_uart_ic(self._uart_ic_list(), vendor_id))
         if chip:
             return chip
@@ -2557,8 +2568,12 @@ class SerialPortApp:
             if not fast:
                 for index, entry in enumerate(port_data):
                     status, port, vendor_id, device_name, description, baud = entry
-                    if status in ("Identified", "Open"):
-                        # Keep Identified until device scan demotes; keep our Open handle
+                    if self._is_held_open_port(port, status):
+                        close_header()
+                        self._log_skipped_open(port, vendor_id)
+                        continue
+                    if status == "Identified":
+                        # Keep Identified until device scan demotes
                         continue
                     is_accessible = self.is_port_available(port)
                     updated_status = "Available" if is_accessible else "In Use"
@@ -2766,6 +2781,9 @@ class SerialPortApp:
                     self._log_port_header(port, vid, pid)
                     self._log_cont("  skipped (In Use)")
                     continue
+                if self._is_held_open_port(port, status):
+                    self._log_skipped_open(port, vid, pid)
+                    continue
                 if status not in ("Available", "Identified"):
                     continue
                 self._log_port_header(port, vid, pid)
@@ -2859,14 +2877,22 @@ class SerialPortApp:
             )
 
             for port_info in comports:
-                if held and port_info.device == held and held_entry is not None:
-                    port_data.append(held_entry)
-                    if held in self._identified_device_by_port:
-                        identified_map[held] = self._identified_device_by_port[held]
-                    self._log_port_header(
+                existing = next(
+                    (entry for entry in self.port_data if entry[1] == port_info.device),
+                    None,
+                )
+                row_status = existing[0] if existing else None
+                if self._is_held_open_port(port_info.device, row_status):
+                    keep = existing if existing is not None else held_entry
+                    if keep is not None:
+                        port_data.append(keep)
+                        if port_info.device in self._identified_device_by_port:
+                            identified_map[port_info.device] = (
+                                self._identified_device_by_port[port_info.device]
+                            )
+                    self._log_skipped_open(
                         port_info.device, port_info.vid, port_info.pid
                     )
-                    self._log_cont("  skipped (held open by this app)")
                     continue
                 status = (
                     "In Use"

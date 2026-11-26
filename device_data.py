@@ -337,6 +337,22 @@ def _as_int(value, default=None):
         return default
 
 
+def _as_bool(value, default=False):
+    """JSON true/false, plus a few string/number spellings. Missing → default."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes"):
+        return True
+    if text in ("false", "0", "no", ""):
+        return False
+    return default
+
+
 def _as_float(value, default=None):
     if value is None or value == "":
         return default
@@ -475,6 +491,7 @@ def migrate_device(device):
         "response": {
             "regex": regex,
             "device_column": response.get("device_column") or "",
+            "append_response": _as_bool(response.get("append_response"), False),
         },
     }
     return migrated, None
@@ -708,24 +725,66 @@ def uart_ic_label(ic):
     return name or None
 
 
+def response_append_enabled(device):
+    """True when response.append_response is set. Missing / invalid → False."""
+    if not isinstance(device, dict):
+        return False
+    response = device.get("response")
+    if not isinstance(response, dict):
+        return False
+    return _as_bool(response.get("append_response"), False)
+
+
+_SAMPLE_RESPONSE_GROUPS = {
+    "revision": "1.01",
+    "firmware": "1.01",
+    "date": "01/01/26",
+    "serial": "12345",
+}
+
+
+def sample_response_groups(device):
+    """Named regex groups filled with sample values for Device Status sizing."""
+    pattern = ((device or {}).get("response") or {}).get("regex") or ""
+    if not pattern:
+        return None
+    try:
+        compiled = re.compile(pattern)
+    except re.error:
+        return None
+    if not compiled.groupindex:
+        return None
+    return {
+        name: _SAMPLE_RESPONSE_GROUPS.get(name, "1.01")
+        for name in compiled.groupindex
+    }
+
+
+def sample_device_column(device):
+    """device_column filled from sample regex groups (field-width probe)."""
+    return format_device_column(device, sample_response_groups(device))
+
+
 def identified_connected_label(info, device, device_column=None):
     """Identified-row Connected Device / Device Status text.
 
     One helper so the table column and the bottom Device Status field cannot
-    drift. Prefer manufacturer + model + short_description from
-    devices_info.json (falling back field-by-field to devices.json). If there
-    is no short description, keep the existing identify device_column so
-    Scan/Identify results are not lost.
+    drift. Always manufacturer + model + short_description from
+    devices_info.json (falling back field-by-field to devices.json). When
+    response.append_response is true, append the formatted device_column
+    after that name, separated by ' - '. When false, never show the
+    response text.
     """
     manufacturer = (prefer_info_field(info, device, "manufacturer") or "").strip()
     model = (prefer_info_field(info, device, "model") or "").strip()
     short = (prefer_info_field(info, device, "short_description") or "").strip()
-    if short:
-        return " ".join(part for part in (manufacturer, model, short) if part)
+    label = " ".join(part for part in (manufacturer, model, short) if part)
     column = (device_column or "").strip()
-    if column:
+    if response_append_enabled(device) and column:
+        if label:
+            return f"{label} - {column}"
         return column
-    return " ".join(part for part in (manufacturer, model) if part) or None
+    return label or None
 
 
 def catalog_device_list(payload):
@@ -748,7 +807,9 @@ def catalog_identified_labels(devices_payload, info_payload):
         info = match_device_info(
             infos, device.get("manufacturer"), device.get("model")
         )
-        column = format_device_column(device)
+        column = (
+            sample_device_column(device) if response_append_enabled(device) else ""
+        )
         label = identified_connected_label(info, device, column)
         if not label or label in seen:
             continue
