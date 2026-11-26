@@ -62,9 +62,9 @@ Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response
 Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched
 ```
 
-Results: `Matched`, `No response`, `No match: '<first ~30 chars, repr-escaped>'`, `Skipped, port ID doesn't match`, or `Error: <short msg>`. In Use ports still get a one-line skip under their `Port:` header. Identify on the open port uses the same layout.
+Results: `Matched`, `No response`, `No match: '<first ~30 chars, repr-escaped>'`, `Skipped, port ID doesn't match`, or `Error: <short msg>`. In Use ports still get a one-line skip under their `Port:` header. Ports this app has **Open** are never probed by Scan Ports, Scan Devices, auto-scan, or retest: one `Port:` header then `Skipped, port is Open`, and the Open row (status and device info) stays as-is. Identify on the open port still probes that one device.
 
-Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
+Identified rows (and Open rows that still have that identified device) show manufacturer, model, and short description from `devices_info.json` when present (falling back field-by-field to `devices.json`). If `response.append_response` is true, the formatted `device_column` is appended after that name, separated by ` - ` (for example `MUX Wiring MB607 Body Control Module - Revision 1.01`). If it is false, the response text is never shown. The bottom Device Status field uses the same string.
 
 **Select** prints JSON of the open-port specs plus the identified device, then quits. The object has only `port`, `baud`, `data_bits`, `stop_bits`, `parity`, `flow_control`, and `device`. `device` is `{manufacturer, model, short_description}` after Identify/Scan confirms a device, or `null` if none was identified. If no port is chosen, `"port"` is `null` and the window stays open. **Exit** (and the window X) still prints `{"result": null}`. Run from a terminal (`run.bat`) so you can see that JSON.
 
@@ -96,7 +96,8 @@ Each item under `"devices"` describes how to find one piece of equipment. Old fi
 - `serial_parameters.baud_rates` — baud values tried in order (bps) when identifying the device. The picker's Baud **dropdown** is **not** this list; it comes from `serial_ports.json` as described above. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
 - `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped.
 - `response.regex` — pattern that must appear in the reply. Named groups like `(?P<revision>...)` are allowed.
-- `response.device_column` — text for an identified row, filled from regex groups and device fields (for example `Revision {revision}`).
+- `response.device_column` — filled from regex groups and device fields (for example `Revision {revision}`). Used only when `append_response` is true.
+- `response.append_response` — `true` or `false` (default `false`). When true, Connected Device / Device Status is `manufacturer model short_description - <device_column>`. When false, the response text is never shown. The device editor checkbox is **Show response after device name**.
 
 Example:
 
@@ -124,7 +125,8 @@ Example:
       },
       "response": {
         "regex": "RevP(?P<revision>\\d+\\.\\d+)\\s+(?P<date>\\d+/\\d+/\\d+)",
-        "device_column": "Revision {revision}"
+        "device_column": "Revision {revision}",
+        "append_response": true
       }
     }
   ]

@@ -211,6 +211,13 @@ class DeviceEditorApp:
             entry = tk.Entry(frame)
             entry.pack(fill=tk.X, expand=True, padx=5)
             self.fields[label] = entry
+        self.append_response_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            response_frame,
+            text="Show response after device name",
+            variable=self.append_response_var,
+            anchor="w",
+        ).pack(fill=tk.X, pady=2)
 
     def load_device_details(self, event=None):
         """Load the details of the selected device into the fields."""
@@ -250,6 +257,10 @@ class DeviceEditorApp:
         if "Response Regex" in self.fields:
             self.fields["Response Regex"].delete(0, tk.END)
             self.fields["Response Regex"].insert(0, device.get("response", {}).get("regex", ""))
+        if getattr(self, "append_response_var", None) is not None:
+            self.append_response_var.set(
+                bool((device.get("response") or {}).get("append_response", False))
+            )
 
     def save_changes(self):
         """Save changes to the selected device."""
@@ -272,7 +283,13 @@ class DeviceEditorApp:
         device["commands"]["initialize"]["pause"] = int(self.fields["Initialize Pause"].get())
         device["commands"]["identify"]["message"] = eval(self.fields["Identify Command"].get())  # Use eval to parse escape characters
         device["commands"]["identify"]["pause"] = int(self.fields["Identify Pause"].get())
+        if "response" not in device or not isinstance(device.get("response"), dict):
+            device["response"] = {}
         device["response"]["regex"] = self.fields["Response Regex"].get()
+        if getattr(self, "append_response_var", None) is not None:
+            device["response"]["append_response"] = bool(
+                self.append_response_var.get()
+            )
         self.save_devices()
         messagebox.showinfo("Success", "Device updated successfully.")
 
@@ -300,7 +317,8 @@ class DeviceEditorApp:
             },
             "response": {
                 "regex": "",
-                "device_column": ""
+                "device_column": "",
+                "append_response": False,
             }
         }
         self.devices.append(new_device)
