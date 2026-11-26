@@ -1,0 +1,71 @@
+{
+  "devices": [
+    {
+      "manufacturer": "SIMCom",
+      "model": "SIM7080",
+      "type": "Cellular Module",
+      "short_description": "",
+      "long_description": "",
+      "serial_parameters": {
+        "baud_rates": [115200],
+        "data_bits": [8],
+        "stop_bits": [1],
+        "parity": ["None"],
+        "flow_control": ["None"]
+      }
+    },
+    {
+      "manufacturer": "MUX Wiring",
+      "model": "MB607",
+      "type": "Body Control Module",
+      "short_description": "Body Control Module",
+      "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+      "serial_parameters": {
+        "min_baud": 300,
+        "max_baud": 921600,
+        "baud_rates": [115200, 460800],
+        "data_bits": [8],
+        "stop_bits": [1],
+        "parity": ["None"],
+        "flow_control": ["None"]
+      },
+      "hardware": {
+        "voltages": ["3.3V", "5.0V"],
+        "interfaces": ["SIP-Male"],
+        "pins": [
+          {"signal": "TX", "pin": 1},
+          {"signal": "RX", "pin": 2},
+          {"signal": "GND", "pin": 3}
+        ]
+      }
+    },
+    {
+      "manufacturer": "Rohde & Schwarz",
+      "model": "HMP4040",
+      "type": "Power Supply",
+      "short_description": "",
+      "long_description": "",
+      "serial_parameters": {
+        "baud_rates": [9600],
+        "data_bits": [8],
+        "stop_bits": [1],
+        "parity": ["None"],
+        "flow_control": ["None"]
+      }
+    },
+    {
+      "manufacturer": "ESO",
+      "model": "S-Woom32",
+      "type": "",
+      "short_description": "",
+      "long_description": "",
+      "serial_parameters": {
+        "baud_rates": [9600],
+        "data_bits": [8],
+        "stop_bits": [1],
+        "parity": ["None"],
+        "flow_control": ["None"]
+      }
+    }
+  ]
+}

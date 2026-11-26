@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2026).
+Version: 3.3 — Device pick, Identify failures, single outlines, serial_ports / devices_info (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -8,7 +8,7 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 - White inner boxes: white fill, flat 1px `#A0A0A0` outline
 - Buttons: gray `#C0C0C0`, same 1px `#A0A0A0` outline
 - **One** outer border: orange `#FF8C00`, 3px (padding is white inside it, not extra orange)
-- Control outline (entries, combos, read-only fields): flat 1px `#A0A0A0` (no sunken / raised)
+- Control outline (entries, combos, read-only fields): **one** flat 1px `#A0A0A0` line (no sunken / raised, no stacked ttk + wrap borders)
 - Disabled text: `#808080` (no hover)
 - Selected list row: yellow `#FFFF00`, dark text
 - Settings preview / Select (dialog new line): green `#90EE90`
@@ -35,7 +35,8 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 - Clicking a header button runs that action once and clears **all three** auto-repeat checkboxes
 - **Scan Devices** (header) is unchanged; the Manually-panel button is **Identify**
 - Column titles and cells are left-anchored
-- Fixed column widths: Status 80, Port # 170, ID/Baud 110; Serial Driver / Connected Device fills the rest
+- Fixed column widths: Status 80, Port # 64 (fits `COM99` plus 2px cell padding), ID/Baud 110; Serial Driver / Connected Device fills the rest. The Port *dropdown* stays sized from `/tmp/serialdemo/ttyUSB0`
+- Flat 1px `#A0A0A0` border around the list (same as the white boxes), one line
 - 6 rows, 2px cell padding, 24px row height
 - Port names are the real Windows names (`COM4`), sorted naturally (`COM2` before `COM10`)
 - IDs show as hex VID:PID, e.g. `0x10C4:0xEA60`
@@ -44,6 +45,7 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 - Double-click a row is the same as **Select**
 - In Use rows appear in the list and Port dropdown only when In Use is on (or after a one-shot In Use click)
 - List Status column values stay **Available** / **In Use** / **Open** / **Identified** (not the bottom Port Status words)
+- Serial Driver / Connected Device: Available / In Use / Open rows show the matched `serial_ports.json` chip (`manufacturer` + `model`), or the OS description if none matches. Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the identify `device_column` text
 
 ## Manually (port / device box)
 - Titled light-blue box under Automated
@@ -54,7 +56,7 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 ### White box 1
 - One row: **Port** combo (wide enough for `/tmp/serialdemo/ttyUSB0`), **Baud** (~8 chars), **Settings**, **Open** at the right
 - 16px between those groups
-- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item. Baud lists the selected device's `baud_rates`; if that list is missing, the standard baud list is used (no 600)
+- **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected device's `baud_rates`; if that list is missing, the standard baud list is used (no 600). The user may still type a rate. Do not add a divider or the full standard list under the device rates.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
 - **Settings**: read-only field with the same 1px outline, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); width is computed from the longest legal string (`8 - 1 - Space - xOff/xOn`); click opens the dialog
@@ -67,11 +69,10 @@ Version: 3.2 — slides 2-3 layout plus Iris 8px grid / 24px controls (Nov 26, 2
 - One row: **Device** combo stretching across, **Identify** at the right
 - Identify is 96px, same width as Open, right edges aligned
 - **Device** dropdown format: `Manufacturer  model  115.2K Baud` (two spaces between fields; baud is that device's first listed rate). Labels stay unique: a second copy of the same name gets ` (2)`
-- Picking a Device while the port is **closed** applies that entry's baud and port settings, and sets Port Status to **Unknown**
-- Picking a Device while the port is **open** does not change the port settings; Port Status becomes **Unknown**
-- **Identify** probes only the device shown in the Device dropdown, using the current settings. Enabled only when this app has the port open
-- **Select** prints `Selected port: COMx`, closes the open port, then quits
-- **Exit** and the window X also close the open port before quitting
+- Picking a Device changes **only Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Baud, Settings, or Port Status. The Baud *list* may refresh to that device's rates; the currently shown baud stays even if it is not in the new list
+- **Identify** probes only the device shown in the Device dropdown, using the current settings. Enabled only when this app has the port open. Identify failure does not change Port Status
+- **Select** prints a JSON handoff object to stdout (indented), closes the open port, then quits. If no port is chosen, it prints JSON with `"port": null` and stays open
+- **Exit** and the window X print `{"result": null}`, close the open port, then quit
 - No Status field in this box
 
 ### Enabled / disabled
@@ -88,17 +89,18 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Still inside the orange frame, not in a blue box
 - Left: **Port Status:** [value] and **Device Status:** [value] inline (exception to labels-above)
 - Right: **Select** then **Exit**, each 96px, 8px apart; Exit’s right edge is the common right edge
-- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit
-- Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (selected device changed, or Port Settings / Baud changed)
-- Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a device in the dropdown does not identify it.
-- If `devices.json` is missing or invalid, Device Status shows that error
+- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. They are Labels (not character-width entries). After `update_idletasks()`, wrap width is `winfo_reqwidth()` of a temp Label using the widget’s resolved font (`Font(font=widget.cget("font"))` / `nametofont`) for every value the field can show (**Unidentified**, **Identified**, **3rd Failure**, **Unknown Device**, … for Device Status; **Unknown** / **Closed** / **Opened** / **Failed** for Port Status), plus the 1px outline, then rounded up to the 8px grid. The window min size grows to that bottom-row width so the row cannot squeeze the last glyph.
+- Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (Port Settings / Baud changed). Picking a Device does **not** set Port Status to Unknown
+- Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
+- Identify button failures (same device, try-again): **Failed**, then **2nd Failure**, **3rd Failure**, **4th Failure**, … (normal English ordinals: 11th, 21st, 22nd, 23rd). A successful Scan Devices confirmation of the selected device sets **Identified** and clears the count. A Scan Devices miss does not increment this count
+- If `devices.json` is missing or invalid, Device Status shows that error. Errors from `serial_ports.json` / `devices_info.json` are logged; they do not overwrite a devices.json error
 
 ## Port Settings dialog
 - Open by **click** on the main **Settings** value
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
 - Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3):
+- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified (same fallback as Baud → `STANDARD_BAUD_RATES`). An identified device’s own `serial_parameters` lists win when present; chip catalog lists do not replace these:
   - Data: 8, 7, 6, 5
   - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space

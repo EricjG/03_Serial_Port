@@ -9,21 +9,31 @@ from pathlib import Path
 from device_data import (
     STANDARD_BAUD_RATES,
     baud_rates_for_device,
+    baud_rates_for_picker,
     command_steps,
     connected_device_label,
     default_baud,
+    device_identity_fields,
     device_matches_ids,
     format_device_column,
     format_usb_id,
+    identified_connected_label,
     load_device_file,
+    load_devices_info_file,
+    load_serial_ports_file,
+    match_device_info,
+    match_uart_ic,
     migrate_device,
     migrate_payload,
     parse_usb_id,
     parse_vid_pid,
+    uart_ic_label,
 )
 
 ROOT = Path(__file__).resolve().parent
 DEVICES_JSON = ROOT / "devices.json"
+SERIAL_PORTS_JSON = ROOT / "serial_ports.json"
+DEVICES_INFO_JSON = ROOT / "devices_info.json"
 
 
 def _raw_file():
@@ -215,6 +225,33 @@ class BaudAndMatchTests(unittest.TestCase):
             list(STANDARD_BAUD_RATES),
         )
 
+    def test_unknown_port_without_a_device_uses_the_standard_baud_list(self):
+        self.assertEqual(
+            baud_rates_for_picker(device=None, uart_ic=None),
+            list(STANDARD_BAUD_RATES),
+        )
+        # Chip catalog rates must not replace the slide list when no device is selected.
+        chip = {"serial_parameters": {"baud_rates": [9600, 19200]}}
+        self.assertEqual(
+            baud_rates_for_picker(device=None, uart_ic=chip),
+            list(STANDARD_BAUD_RATES),
+        )
+        self.assertNotIn(600, baud_rates_for_picker(None))
+
+    def test_selected_device_rates_win_on_an_unknown_port(self):
+        device = {"serial_parameters": {"baud_rates": [460800, 115200]}}
+        self.assertEqual(
+            baud_rates_for_picker(device=device, uart_ic=None),
+            [460800, 115200],
+        )
+        self.assertEqual(
+            baud_rates_for_picker(
+                device=device,
+                uart_ic={"serial_parameters": {"baud_rates": [9600]}},
+            ),
+            [460800, 115200],
+        )
+
     def test_vid_pid_match_hex_and_old_decimal(self):
         payload, _error = _loaded()
         mb607 = next(d for d in payload["devices"] if d["model"] == "MB607")
@@ -267,6 +304,142 @@ class DeviceColumnTests(unittest.TestCase):
         )
         hmp = next(d for d in payload["devices"] if d["model"] == "HMP4040")
         self.assertEqual(command_steps(hmp), [("*idn?\r", 1.0)])
+
+
+class SerialPortsFileTests(unittest.TestCase):
+    def test_shipped_file_parses_and_has_erics_chips(self):
+        with open(SERIAL_PORTS_JSON, encoding="utf-8") as handle:
+            raw = json.load(handle)
+        payload, error = load_serial_ports_file(str(SERIAL_PORTS_JSON))
+        self.assertIsNone(error)
+        self.assertEqual(len(raw["serial_ports"]), len(payload["serial_ports"]))
+        models = [ic["model"] for ic in payload["serial_ports"]]
+        self.assertIn("FT232R/RL/RQ", models)
+        self.assertIn("PL2303HX/TA/SA/RA", models)
+        self.assertIn("CP210x (CP2102/2104/2105/2108)", models)
+        for ic in payload["serial_ports"]:
+            self.assertTrue(str(ic["vid"]).startswith("0x"))
+            self.assertIn("vid", ic)
+            self.assertIn("manufacturer", ic)
+            self.assertIn("model", ic)
+
+    def test_missing_and_invalid_files(self):
+        payload, error = load_serial_ports_file(str(ROOT / "no_such_serial_ports.json"))
+        self.assertEqual(payload, {"serial_ports": []})
+        self.assertIn("missing", error)
+        self.assertIn("no known UART ICs", error)
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="utf-8") as out:
+                out.write("{not json")
+            payload, error = load_serial_ports_file(path)
+            self.assertEqual(payload, {"serial_ports": []})
+            self.assertIn("not valid JSON", error)
+        finally:
+            os.unlink(path)
+
+    def test_old_uart_ics_root_key_still_loads(self):
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="utf-8") as out:
+                json.dump(
+                    {
+                        "uart_ics": [
+                            {
+                                "manufacturer": "FTDI",
+                                "model": "Legacy",
+                                "vid": "0x0403",
+                                "pid": "0x6001",
+                            }
+                        ]
+                    },
+                    out,
+                )
+            payload, error = load_serial_ports_file(path)
+            self.assertIsNone(error)
+            self.assertEqual(payload["serial_ports"][0]["model"], "Legacy")
+            self.assertNotIn("uart_ics", payload)
+        finally:
+            os.unlink(path)
+
+    def test_vid_pid_lookup_prefers_exact_and_allows_vid_only(self):
+        payload, _error = load_serial_ports_file(str(SERIAL_PORTS_JSON))
+        ics = payload["serial_ports"]
+        ftdi = match_uart_ic(ics, "0x0403", "0x6001")
+        self.assertEqual(ftdi["manufacturer"], "FTDI")
+        self.assertEqual(uart_ic_label(ftdi), "FTDI FT232R/RL/RQ")
+        self.assertIsNone(match_uart_ic(ics, "0x0403", "0x9999"))
+        prolific = match_uart_ic(ics, "0x067B:0x2303")
+        self.assertEqual(prolific["model"], "PL2303HX/TA/SA/RA")
+        cp210x = match_uart_ic(ics, 0x10C4, 0xEA60)
+        self.assertIn("CP210x", cp210x["model"])
+        vid_only = [
+            {"manufacturer": "Any", "model": "Chip", "vid": "0x1234"},
+            {"manufacturer": "Exact", "model": "Hit", "vid": "0x1234", "pid": "0x0001"},
+        ]
+        self.assertEqual(match_uart_ic(vid_only, "0x1234", "0x0001")["model"], "Hit")
+        self.assertEqual(match_uart_ic(vid_only, "0x1234", "0x9999")["model"], "Chip")
+        self.assertEqual(match_uart_ic(vid_only, "0x1234")["model"], "Chip")
+
+
+class DevicesInfoFileTests(unittest.TestCase):
+    def test_shipped_file_covers_every_devices_json_model(self):
+        devices, error = load_device_file(str(DEVICES_JSON))
+        info, info_error = load_devices_info_file(str(DEVICES_INFO_JSON))
+        self.assertIsNone(error)
+        self.assertIsNone(info_error)
+        identify_models = [(d["manufacturer"], d["model"]) for d in devices["devices"]]
+        info_models = [(d["manufacturer"], d["model"]) for d in info["devices"]]
+        self.assertEqual(identify_models, info_models)
+        mb607 = match_device_info(info["devices"], "MUX Wiring", "MB607")
+        self.assertEqual(mb607["type"], "Body Control Module")
+        self.assertEqual(mb607["hardware"]["interfaces"], ["SIP-Male"])
+        self.assertIsNone(match_device_info(info["devices"], "MUX Wiring", "nope"))
+
+    def test_missing_and_invalid_files(self):
+        payload, error = load_devices_info_file(str(ROOT / "no_such_devices_info.json"))
+        self.assertEqual(payload, {"devices": []})
+        self.assertIn("missing", error)
+        self.assertIn("no known device attributes", error)
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="utf-8") as out:
+                out.write("{not json")
+            payload, error = load_devices_info_file(path)
+            self.assertEqual(payload, {"devices": []})
+            self.assertIn("not valid JSON", error)
+        finally:
+            os.unlink(path)
+
+    def test_identity_fields_prefer_info_then_devices_json(self):
+        info = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "type": "Body Control Module",
+            "short_description": "Body Control Module",
+            "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+        }
+        device = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "type": "Body Control Module",
+            "short_description": "Body Control Module",
+            "long_description": "from devices.json",
+        }
+        fields = device_identity_fields(info, device, "Revision 1.0 01/01/26")
+        self.assertEqual(fields["short_description"], "Body Control Module")
+        self.assertEqual(fields["device_column"], "Revision 1.0 01/01/26")
+        self.assertEqual(
+            identified_connected_label(info, device, "Revision 1.0 01/01/26"),
+            "MUX Wiring MB607 Body Control Module",
+        )
+        self.assertEqual(
+            identified_connected_label(None, None, "Revision 1.0 01/01/26"),
+            "Revision 1.0 01/01/26",
+        )
 
 
 if __name__ == "__main__":

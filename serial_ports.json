@@ -1,0 +1,67 @@
+{
+  "serial_ports": [
+    {
+      "manufacturer": "FTDI",
+      "model": "FT232R/RL/RQ",
+      "vid": "0x0403",
+      "pid": "0x6001",
+      "serial_parameters": {
+        "min_baud": 300,
+        "max_baud": 3000000,
+        "baud_rates": [9600, 115200, 460800, 921600],
+        "data_bits": [7, 8],
+        "stop_bits": [1, 2],
+        "parity": ["None", "Even", "Odd", "Mark", "Space"],
+        "flow_control": ["None", "RTS/CTS", "XON/XOFF"]
+      },
+      "hardware": {
+        "voltages": ["3.3V", "5.0V"],
+        "signal_voltages": ["3.3V", "5.0V"],
+        "signal_lines": ["TX", "RX", "RTS", "CTS", "DTR", "DSR", "DCD", "RI", "GND"]
+      },
+      "documents": {
+        "note_short": "USB to UART bridge. Matches Eric's COM3 (FTDI USB Serial Port, serial A506MYFVA, driver FTSER2K)."
+      }
+    },
+    {
+      "manufacturer": "Prolific",
+      "model": "PL2303HX/TA/SA/RA",
+      "vid": "0x067B",
+      "pid": "0x2303",
+      "serial_parameters": {
+        "min_baud": 75,
+        "max_baud": 12000000,
+        "data_bits": [5, 6, 7, 8],
+        "stop_bits": [1, 2],
+        "parity": ["None", "Even", "Odd", "Mark", "Space"],
+        "flow_control": ["None", "RTS/CTS", "XON/XOFF"]
+      },
+      "hardware": {
+        "signal_lines": ["TX", "RX", "RTS", "CTS", "DTR", "DSR", "DCD", "RI", "GND"]
+      },
+      "documents": {
+        "note_short": "USB to UART bridge. Matches Eric's COM8 (Prolific USB-to-Serial Comm Port, driver ser2pl_1)."
+      }
+    },
+    {
+      "manufacturer": "Silicon Labs",
+      "model": "CP210x (CP2102/2104/2105/2108)",
+      "vid": "0x10C4",
+      "pid": "0xEA60",
+      "serial_parameters": {
+        "min_baud": 300,
+        "max_baud": 2000000,
+        "data_bits": [5, 6, 7, 8],
+        "stop_bits": [1, 2],
+        "parity": ["None", "Even", "Odd"],
+        "flow_control": ["None", "RTS/CTS", "XON/XOFF"]
+      },
+      "hardware": {
+        "signal_lines": ["TX", "RX", "RTS", "CTS", "DTR", "DSR", "DCD", "GND"]
+      },
+      "documents": {
+        "note_short": "Catalog entry for the MB607's CP210x adapter (VID 0x10C4, PID 0xEA60). Not on Eric's PC at the Nov 25 scan."
+      }
+    }
+  ]
+}

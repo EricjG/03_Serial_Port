@@ -1,4 +1,4 @@
-"""Load, migrate, and validate devices.json (no Tkinter, no serial)."""
+"""Load, migrate, and validate device data files (no Tkinter, no serial)."""
 
 from __future__ import annotations
 
@@ -129,6 +129,17 @@ def baud_rates_for_device(device):
     params = device.get("serial_parameters") or {}
     rates = params.get("baud_rates") or []
     return list(rates) if rates else list(STANDARD_BAUD_RATES)
+
+
+def baud_rates_for_picker(device=None, uart_ic=None):
+    """Baud dropdown: selected device rates win; otherwise STANDARD_BAUD_RATES.
+
+    serial_ports.json is not used. An unknown port (no VID/PID match) with no
+    device selected/identified stays on the UI-slide standard list (no 600).
+    """
+    if device:
+        return baud_rates_for_device(device)
+    return list(STANDARD_BAUD_RATES)
 
 
 def default_baud(device):
@@ -355,3 +366,231 @@ def load_device_file(path):
     if error:
         return payload, f"{name} is invalid — no known devices."
     return payload, None
+
+
+def migrate_uart_ic(entry):
+    """Normalize one serial_ports.json chip entry. Returns (entry, error) — error means skip it."""
+    if not isinstance(entry, dict):
+        return None, "uart ic entry is not an object"
+    vid = format_usb_id(entry.get("vid"))
+    if vid is None:
+        return None, "uart ic is missing vid"
+    manufacturer = entry.get("manufacturer") or ""
+    model = entry.get("model") or ""
+    if not manufacturer or not model:
+        return None, "uart ic is missing manufacturer or model"
+    migrated = dict(entry)
+    migrated["manufacturer"] = manufacturer
+    migrated["model"] = model
+    migrated["vid"] = vid
+    pid = format_usb_id(entry.get("pid")) if entry.get("pid") not in (None, "") else None
+    if pid is not None:
+        migrated["pid"] = pid
+    elif "pid" in migrated:
+        del migrated["pid"]
+    return migrated, None
+
+
+def _serial_ports_rows(data):
+    """Chip list from serial_ports.json. Accepts the old uart_ics root key."""
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("serial_ports"), list):
+        return data["serial_ports"]
+    if isinstance(data.get("uart_ics"), list):
+        return data["uart_ics"]
+    return None
+
+
+def migrate_serial_ports_payload(data):
+    """Return (payload, error). payload always has a serial_ports list."""
+    rows = _serial_ports_rows(data)
+    if rows is None:
+        return {"serial_ports": []}, "serial_ports.json has no serial_ports list"
+    ics = []
+    for item in rows:
+        migrated, error = migrate_uart_ic(item)
+        if migrated is not None:
+            ics.append(migrated)
+    return {"serial_ports": ics}, None
+
+
+def load_serial_ports_file(path):
+    """Read serial_ports.json. Never raises. Returns (payload, error_or_None)."""
+    empty = {"serial_ports": []}
+    name = os.path.basename(path) if path else "serial_ports.json"
+    if not path or not os.path.exists(path):
+        return empty, f"{name} is missing — no known UART ICs."
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError:
+        return empty, f"{name} is not valid JSON — no known UART ICs."
+    except OSError:
+        return empty, f"{name} could not be read — no known UART ICs."
+    payload, error = migrate_serial_ports_payload(data)
+    if error:
+        return payload, f"{name} is invalid — no known UART ICs."
+    return payload, None
+
+
+def migrate_device_info(entry):
+    """Normalize one devices_info.json entry. Returns (entry, error)."""
+    if not isinstance(entry, dict):
+        return None, "device attributes entry is not an object"
+    migrated = dict(entry)
+    migrated["manufacturer"] = entry.get("manufacturer") or ""
+    migrated["model"] = entry.get("model") or ""
+    migrated["type"] = entry.get("type") or ""
+    migrated["short_description"] = entry.get("short_description") or ""
+    migrated["long_description"] = entry.get("long_description") or ""
+    return migrated, None
+
+
+def migrate_devices_info_payload(data):
+    """Return (payload, error). payload always has a devices list."""
+    if not isinstance(data, dict) or not isinstance(data.get("devices"), list):
+        return {"devices": []}, "devices_info.json has no device list"
+    devices = []
+    for item in data["devices"]:
+        migrated, error = migrate_device_info(item)
+        if migrated is not None:
+            devices.append(migrated)
+    return {"devices": devices}, None
+
+
+def load_devices_info_file(path):
+    """Read devices_info.json. Never raises. Returns (payload, error_or_None)."""
+    empty = {"devices": []}
+    name = os.path.basename(path) if path else "devices_info.json"
+    if not path or not os.path.exists(path):
+        return empty, f"{name} is missing — no known device attributes."
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError:
+        return empty, f"{name} is not valid JSON — no known device attributes."
+    except OSError:
+        return empty, f"{name} could not be read — no known device attributes."
+    payload, error = migrate_devices_info_payload(data)
+    if error:
+        return payload, f"{name} is invalid — no known device attributes."
+    return payload, None
+
+
+def uart_ic_list(payload):
+    if isinstance(payload, dict):
+        return payload.get("serial_ports") or payload.get("uart_ics") or []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def devices_info_list(payload):
+    if isinstance(payload, dict):
+        return payload.get("devices") or []
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def match_uart_ic(ics, vid, pid=None):
+    """Matched serial_ports.json chip entry for a port VID/PID, or None.
+
+    An entry with no pid matches any product ID from that vendor. Prefer an
+    exact VID+PID hit over a vid-only entry.
+    """
+    port_vid, port_pid = parse_vid_pid(vid, pid)
+    if port_vid is None:
+        return None
+    exact = None
+    vid_only = None
+    for ic in ics or []:
+        if not isinstance(ic, dict):
+            continue
+        cvid = parse_usb_id(ic.get("vid"))
+        if cvid is None or cvid != port_vid:
+            continue
+        cpid = parse_usb_id(ic.get("pid")) if ic.get("pid") not in (None, "") else None
+        if cpid is not None:
+            if port_pid is not None and cpid == port_pid:
+                exact = ic
+                break
+            continue
+        if vid_only is None:
+            vid_only = ic
+    return exact or vid_only
+
+
+def match_device_info(devices, manufacturer, model):
+    """devices_info.json entry linked by manufacturer + model, or None."""
+    manufacturer = (manufacturer or "").strip()
+    model = (model or "").strip()
+    if not manufacturer and not model:
+        return None
+    for item in devices or []:
+        if not isinstance(item, dict):
+            continue
+        if (item.get("manufacturer") or "").strip() != manufacturer:
+            continue
+        if (item.get("model") or "").strip() != model:
+            continue
+        return item
+    return None
+
+
+def prefer_info_field(info, device, key, default=""):
+    """Prefer devices_info.json, then the identify template, then default."""
+    for source in (info, device):
+        if not source:
+            continue
+        value = source.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return default
+
+
+def uart_ic_label(ic):
+    """Port-list chip name: Manufacturer model."""
+    if not ic:
+        return None
+    name = " ".join(
+        part
+        for part in (ic.get("manufacturer"), ic.get("model"))
+        if part
+    ).strip()
+    return name or None
+
+
+def identified_connected_label(info, device, device_column=None):
+    """Identified-row Connected Device text.
+
+    Prefer manufacturer + model + short_description from devices_info.json
+    (falling back field-by-field to devices.json). If there is no short
+    description, keep the existing identify device_column so Scan/Identify
+    results are not lost.
+    """
+    manufacturer = (prefer_info_field(info, device, "manufacturer") or "").strip()
+    model = (prefer_info_field(info, device, "model") or "").strip()
+    short = (prefer_info_field(info, device, "short_description") or "").strip()
+    if short:
+        return " ".join(part for part in (manufacturer, model, short) if part)
+    column = (device_column or "").strip()
+    if column:
+        return column
+    return " ".join(part for part in (manufacturer, model) if part) or None
+
+
+def device_identity_fields(info, device, device_column=""):
+    """Select-payload device block; blank strings when unknown."""
+    return {
+        "manufacturer": prefer_info_field(info, device, "manufacturer", "") or "",
+        "model": prefer_info_field(info, device, "model", "") or "",
+        "type": prefer_info_field(info, device, "type", "") or "",
+        "short_description": prefer_info_field(info, device, "short_description", "") or "",
+        "long_description": prefer_info_field(info, device, "long_description", "") or "",
+        "device_column": device_column or "",
+    }
