@@ -309,10 +309,35 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
 
 
 class AutoRepeatAndPortListTests(unittest.TestCase):
-    def test_header_button_click_clears_all_auto_repeat(self):
-        self.assertEqual(apply_header_button_click(True, True, True), (False, False, False))
-        self.assertEqual(apply_header_button_click(False, True, False), (False, False, False))
-        self.assertEqual(apply_header_button_click(True, False, True), (False, False, False))
+    def test_in_use_button_checks_in_use_and_clears_auto_scans(self):
+        self.assertEqual(
+            apply_header_button_click(False, True, True, "in_use"),
+            (True, False, False),
+        )
+        self.assertEqual(
+            apply_header_button_click(True, True, False, "in_use"),
+            (True, False, False),
+        )
+
+    def test_scan_ports_button_leaves_in_use_and_clears_auto_scans(self):
+        self.assertEqual(
+            apply_header_button_click(True, True, True, "scan_ports"),
+            (True, False, False),
+        )
+        self.assertEqual(
+            apply_header_button_click(False, True, True, "scan_ports"),
+            (False, False, False),
+        )
+
+    def test_scan_devices_button_leaves_in_use_and_clears_auto_scans(self):
+        self.assertEqual(
+            apply_header_button_click(True, False, True, "scan_devices"),
+            (True, False, False),
+        )
+        self.assertEqual(
+            apply_header_button_click(False, True, True, "scan_devices"),
+            (False, False, False),
+        )
 
     def test_dropdown_hides_in_use_unless_requested(self):
         rows = [

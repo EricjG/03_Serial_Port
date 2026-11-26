@@ -123,7 +123,7 @@ Example:
         "identify": {"message": "I\r", "pause_ms": 1000}
       },
       "response": {
-        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
+        "regex": "RevP(?P<revision>\\d+\\.\\d+)\\s+(?P<date>\\d+/\\d+/\\d+)",
         "device_column": "Revision {revision}"
       }
     }
