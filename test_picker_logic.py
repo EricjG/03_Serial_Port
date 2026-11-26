@@ -2,20 +2,34 @@
 
 import unittest
 
+from device_data import STANDARD_BAUD_RATES
 from picker_logic import (
+    BAUD_SHORT,
+    DATA_BITS_CHOICES,
     DEFAULT_PARITY,
+    DEVICE_STATUS_IDENTIFIED,
+    DEVICE_STATUS_UNIDENTIFIED,
+    FLOW_CHOICES,
+    FLOW_XOFF_XON,
+    PARITY_CHOICES,
+    STOP_BITS_CHOICES,
     UNKNOWN_DEVICE_MESSAGE,
     apply_header_button_click,
     check_button_char_width,
     device_identity_key,
     device_message_text,
+    device_status_text,
     dropdown_ports,
+    format_baud_label,
     format_settings_text,
     format_vid_pid,
     identified_device_message,
+    longest_settings_text,
     natural_port_sort_key,
+    normalize_flow_choice,
     open_button_text,
     picker_control_state,
+    picker_device_label,
     port_event_message,
     port_status_text,
     unique_device_labels,
@@ -81,8 +95,12 @@ class SettingsTextTests(unittest.TestCase):
             "8 - 1 - None - None",
         )
         self.assertEqual(
-            format_settings_text("7", "2", "Even", "XON/XOFF"),
-            "7 - 2 - Even - XON/XOFF",
+            format_settings_text("7", "2", "Even", FLOW_XOFF_XON),
+            "7 - 2 - Even - xOff/xOn",
+        )
+        self.assertEqual(
+            format_settings_text("8", "1", "Space", "RTS/CTS"),
+            "8 - 1 - Space - RTS/CTS",
         )
 
     def test_default_parity_is_none(self):
@@ -157,7 +175,7 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         )
         self.assertEqual(
             identified_device_message(self.mb607, self.mb607),
-            "Device: MUX Wiring MB607 Body Control Module",
+            DEVICE_STATUS_IDENTIFIED,
         )
 
     def test_other_dropdown_or_other_port_resets_until_that_result_matches(self):
@@ -171,7 +189,18 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         )
         self.assertEqual(
             identified_device_message(self.sim, self.sim),
-            "Device: SIMCom SIM7080",
+            DEVICE_STATUS_IDENTIFIED,
+        )
+
+    def test_device_status_is_unidentified_until_confirmed(self):
+        self.assertEqual(UNKNOWN_DEVICE_MESSAGE, DEVICE_STATUS_UNIDENTIFIED)
+        self.assertEqual(
+            device_status_text(None, self.mb607),
+            DEVICE_STATUS_UNIDENTIFIED,
+        )
+        self.assertEqual(
+            device_status_text(self.mb607, self.mb607),
+            DEVICE_STATUS_IDENTIFIED,
         )
 
     def test_identity_key_is_manufacturer_and_model(self):
@@ -186,10 +215,17 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
 
 class OpenButtonAndControlStateTests(unittest.TestCase):
     def test_open_button_labels(self):
-        self.assertEqual(open_button_text("COM4", "available"), "Open: COM4")
-        self.assertEqual(open_button_text("COM4", "held"), "Close: COM4")
-        self.assertEqual(open_button_text("COM5", "in_use"), "In-Use: COM5")
-        self.assertEqual(open_button_text(None, "empty"), "Open:")
+        self.assertEqual(open_button_text("COM4", "available"), "Open")
+        self.assertEqual(open_button_text("COM4", "held"), "Close")
+        self.assertEqual(open_button_text("COM5", "in_use"), "In Use")
+        self.assertEqual(open_button_text(None, "empty"), "Open")
+
+    def test_open_button_text_never_includes_the_port(self):
+        for kind in ("available", "held", "in_use", "empty"):
+            text = open_button_text("/tmp/serialdemo/ttyUSB0", kind)
+            self.assertNotIn("/", text)
+            self.assertNotIn("ttyUSB0", text)
+            self.assertIn(text, ("Open", "Close", "In Use"))
 
     def test_empty_list_disables_connection_controls(self):
         state = picker_control_state(has_ports=False)
@@ -200,7 +236,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertFalse(state["device"])
         self.assertFalse(state["identify"])
         self.assertFalse(state["select"])
-        self.assertEqual(state["open_label"], "Open:")
+        self.assertEqual(state["open_label"], "Open")
         self.assertEqual(state["status"], "None Available")
 
     def test_open_port_locks_settings_and_enables_identify(self):
@@ -214,7 +250,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertFalse(state["baud"])
         self.assertFalse(state["settings"])
         self.assertTrue(state["open"])
-        self.assertEqual(state["open_label"], "Close: COM4")
+        self.assertEqual(state["open_label"], "Close")
         self.assertTrue(state["device"])
         self.assertTrue(state["identify"])
         self.assertTrue(state["select"])
@@ -228,7 +264,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         )
         self.assertTrue(state["port"])
         self.assertFalse(state["open"])
-        self.assertEqual(state["open_label"], "In-Use: COM5")
+        self.assertEqual(state["open_label"], "In Use")
         self.assertFalse(state["identify"])
         self.assertTrue(state["select"])
 
@@ -243,7 +279,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertTrue(state["baud"])
         self.assertTrue(state["settings"])
         self.assertTrue(state["open"])
-        self.assertEqual(state["open_label"], "Open: COM4")
+        self.assertEqual(state["open_label"], "Open")
         self.assertTrue(state["device"])
         self.assertFalse(state["identify"])
         self.assertTrue(state["select"])
@@ -305,6 +341,99 @@ class CheckButtonWidthTests(unittest.TestCase):
     def test_zero_checkbox_still_fits_the_label(self):
         self.assertEqual(check_button_char_width(21, 0, 0, 7, extra_pad_px=0), 4)
         self.assertEqual(check_button_char_width(7, 0, 0, 7, extra_pad_px=0), 4)
+
+
+class SlideOptionListTests(unittest.TestCase):
+    def test_data_stop_parity_flow_match_slide_3(self):
+        self.assertEqual(DATA_BITS_CHOICES, ("8", "7", "6", "5"))
+        self.assertEqual(STOP_BITS_CHOICES, ("1", "2"))
+        self.assertEqual(PARITY_CHOICES, ("None", "Odd", "Even", "Mark", "Space"))
+        self.assertEqual(FLOW_CHOICES, ("None", "RTS/CTS", "xOff/xOn"))
+        self.assertNotIn("1.5", STOP_BITS_CHOICES)
+        self.assertNotIn("DSR/DTR", FLOW_CHOICES)
+        self.assertNotIn("XON/XOFF", FLOW_CHOICES)
+
+    def test_typical_speeds_drop_600(self):
+        values = [value for value, _label in BAUD_SHORT]
+        self.assertNotIn(600, values)
+        self.assertEqual(values[0], 300)
+        self.assertEqual(values[1], 1200)
+        self.assertEqual(format_baud_label(115200), "115.2K")
+        self.assertEqual(format_baud_label(460800), "460.8K")
+        self.assertEqual(format_baud_label(600), "600")
+        self.assertEqual(tuple(value for value, _label in BAUD_SHORT), STANDARD_BAUD_RATES)
+
+    def test_flow_aliases_map_to_xoff_xon(self):
+        self.assertEqual(normalize_flow_choice("xOff/xOn"), "xOff/xOn")
+        self.assertEqual(normalize_flow_choice("XON/XOFF"), "xOff/xOn")
+        self.assertEqual(normalize_flow_choice("DSR/DTR"), "None")
+        self.assertEqual(normalize_flow_choice(None), "None")
+
+    def test_longest_settings_fits_space_and_xoff_xon(self):
+        longest = longest_settings_text()
+        self.assertEqual(longest, "8 - 1 - Space - xOff/xOn")
+        self.assertGreaterEqual(len(longest), len("8 - 1 - Space - RTS/CTS"))
+
+    def test_device_dropdown_uses_slide_format(self):
+        mb607 = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+        }
+        self.assertEqual(
+            picker_device_label(mb607, "115.2K"),
+            "MUX Wiring  MB607  115.2K Baud",
+        )
+        self.assertEqual(
+            picker_device_label(
+                {"manufacturer": "SIMCom", "model": "SIM7080"},
+                "115.2K",
+            ),
+            "SIMCom  SIM7080  115.2K Baud",
+        )
+
+
+class LayoutTokenTests(unittest.TestCase):
+    def test_iris_grid_and_control_sizes(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.modules.setdefault("tkinter", MagicMock())
+        sys.modules.setdefault("tkinter.ttk", MagicMock())
+        sys.modules.setdefault("tkinter.font", MagicMock())
+        sys.modules.setdefault("serial", MagicMock())
+        sys.modules.setdefault("serial.tools", MagicMock())
+        sys.modules.setdefault("serial.tools.list_ports", MagicMock())
+        from serial_port_app import (
+            LONGEST_PORT_SAMPLE,
+            UI_BTN_W,
+            UI_CONTROL_H,
+            UI_GAP,
+            UI_GROUP_GAP,
+            UI_ORANGE_BORDER,
+            UI_OUTLINE,
+            UI_PAD,
+            UI_TITLE_H,
+            UI_TREE_CELL_PAD,
+            UI_TREE_COL_WIDTHS,
+            UI_TREE_ROWS,
+        )
+
+        self.assertEqual(UI_PAD, 8)
+        self.assertEqual(UI_GAP, 8)
+        self.assertEqual(UI_GROUP_GAP, 16)
+        self.assertEqual(UI_CONTROL_H, 24)
+        self.assertEqual(UI_BTN_W, 96)
+        self.assertEqual(UI_TITLE_H, 28)
+        self.assertEqual(UI_ORANGE_BORDER, 3)
+        self.assertEqual(UI_OUTLINE, "#A0A0A0")
+        self.assertEqual(UI_TREE_ROWS, 6)
+        self.assertEqual(UI_TREE_CELL_PAD, 2)
+        self.assertEqual(
+            UI_TREE_COL_WIDTHS,
+            {"Status": 80, "Port #": 170, "ID/Baud": 110},
+        )
+        self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
 
 
 if __name__ == "__main__":

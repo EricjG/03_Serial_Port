@@ -41,7 +41,7 @@ GitHub Actions runs the same command on every push and pull request (Ubuntu and 
 Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted.
 
 - `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
-- `short_description`, `long_description` — notes. The Device dropdown uses manufacturer, model, and long description.
+- `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115.2K Baud` (first listed baud). `long_description` is not in that dropdown.
 - `controllers` — USB-serial chips this device may sit behind. `vid` / `pid` are hex strings (`"0x10C4"`). If `pid` is omitted, any product ID from that vendor matches.
 - `serial_parameters.baud_rates` — baud values tried in order (bps). The picker's Baud dropdown shows this list; if it is missing, the standard baud list is used. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
 - `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped.

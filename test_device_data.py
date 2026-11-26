@@ -209,6 +209,7 @@ class BaudAndMatchTests(unittest.TestCase):
         self.assertEqual(baud_rates_for_device(mb607), [460800, 115200])
         self.assertEqual(default_baud(mb607), 460800)
         self.assertEqual(baud_rates_for_device(None), list(STANDARD_BAUD_RATES))
+        self.assertNotIn(600, STANDARD_BAUD_RATES)
         self.assertEqual(
             baud_rates_for_device({"serial_parameters": {}}),
             list(STANDARD_BAUD_RATES),
