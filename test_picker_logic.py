@@ -18,6 +18,9 @@ from picker_logic import (
     MODE_MANUAL,
     apply_device_pick,
     apply_header_button_click,
+    bottom_port_status_fields_from_device,
+    bottom_port_status_fields_from_serial_settings,
+    bottom_port_status_text,
     format_identify_error,
     format_identify_reply_preview,
     format_port_scan_header,
@@ -49,6 +52,7 @@ from picker_logic import (
     picker_control_state,
     picker_device_label,
     port_event_message,
+    port_status_size_samples,
     port_status_text,
     record_identify_failure,
     record_identify_success,
@@ -150,6 +154,90 @@ class NaturalPortSortTests(unittest.TestCase):
         )
 
 
+class BottomPortStatusTextTests(unittest.TestCase):
+    def test_click_shows_just_the_port(self):
+        self.assertEqual(bottom_port_status_text("COM8"), "COM8")
+        self.assertEqual(bottom_port_status_text("COM8", "selected"), "COM8")
+        self.assertEqual(bottom_port_status_text("COM256", "closed"), "COM256")
+        self.assertEqual(bottom_port_status_text(None), "")
+        self.assertEqual(bottom_port_status_text("No Ports Available"), "")
+
+    def test_identified_and_opened_use_short_baud_and_frame(self):
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "identified", baud=115200, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 115.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=460800, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 460.8K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=300, data_bits=8, parity="E", stop_bits=1
+            ),
+            "COM8 300 8E1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "identified", baud=1200, data_bits=8, parity="None", stop_bits=1
+            ),
+            "COM8 1.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=9600, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 9.6K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=19200, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 19.2K 8N1",
+        )
+        self.assertEqual(
+            bottom_port_status_text(
+                "COM8", "opened", baud=921600, data_bits=8, parity="N", stop_bits=1
+            ),
+            "COM8 921.6K 8N1",
+        )
+
+    def test_open_failure_label(self):
+        self.assertEqual(
+            bottom_port_status_text("COM8", "failed"),
+            "COM8 - Failed to open",
+        )
+        self.assertEqual(
+            bottom_port_status_text("COM256", "Failed"),
+            "COM256 - Failed to open",
+        )
+
+    def test_fields_helpers_feed_the_same_formatter(self):
+        opened = bottom_port_status_fields_from_serial_settings(
+            {"baudrate": 115200, "bytesize": 8, "parity": "N", "stopbits": 1}
+        )
+        self.assertEqual(
+            bottom_port_status_text("COM8", "opened", **opened),
+            "COM8 115.2K 8N1",
+        )
+        device = {
+            "serial_parameters": {
+                "data_bits": 8,
+                "parity": "None",
+                "stop_bits": 1,
+            }
+        }
+        identified = bottom_port_status_fields_from_device(device, baud=460800)
+        self.assertEqual(
+            bottom_port_status_text("COM8", "identified", **identified),
+            "COM8 460.8K 8N1",
+        )
+
+
 class StatusAndMessageTests(unittest.TestCase):
     def test_none_available_when_list_is_empty(self):
         self.assertEqual(port_status_text(False), "None Available")
@@ -214,6 +302,14 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
             identified_device_message(self.sim, self.sim),
             DEVICE_STATUS_IDENTIFIED,
         )
+        self.assertEqual(
+            identified_device_message(
+                self.mb607,
+                self.mb607,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            "MUX Wiring MB607 Body Control Module",
+        )
 
     def test_device_status_is_unidentified_until_confirmed(self):
         self.assertEqual(UNKNOWN_DEVICE_MESSAGE, DEVICE_STATUS_UNIDENTIFIED)
@@ -224,6 +320,22 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
         self.assertEqual(
             device_status_text(self.mb607, self.mb607),
             DEVICE_STATUS_IDENTIFIED,
+        )
+        self.assertEqual(
+            device_status_text(
+                self.mb607,
+                self.mb607,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            "MUX Wiring MB607 Body Control Module",
+        )
+        self.assertEqual(
+            device_status_text(
+                self.mb607,
+                self.sim,
+                identified_label="MUX Wiring MB607 Body Control Module",
+            ),
+            DEVICE_STATUS_UNIDENTIFIED,
         )
 
     def test_identity_key_is_manufacturer_and_model(self):
@@ -577,14 +689,22 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         self.assertEqual(identify_failure_label(23), "23rd Failure")
 
     def test_status_fields_size_to_longest_visible_value(self):
-        self.assertEqual(longest_device_status_text(), "Unidentified")
+        samples = device_status_size_samples()
+        self.assertEqual(longest_device_status_text(), max(samples, key=len))
         self.assertGreaterEqual(len(longest_device_status_text()), len("Identified"))
+        self.assertGreaterEqual(len(longest_device_status_text()), len("Unidentified"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("10th Failure"))
         self.assertGreaterEqual(len(longest_device_status_text()), len("11th Failure"))
-        self.assertEqual(longest_port_status_text(), "Unknown")
-        for word in ("Closed", "Opened", "Failed", "Unknown"):
-            self.assertLessEqual(len(word), len(longest_port_status_text()))
-        samples = device_status_size_samples()
+        self.assertEqual(
+            longest_port_status_text(),
+            max(port_status_size_samples(), key=len),
+        )
+        self.assertIn("COM256 - Failed to open", port_status_size_samples())
+        self.assertIn("COM8 115.2K 8N1", port_status_size_samples())
+        self.assertGreaterEqual(
+            len(longest_port_status_text()),
+            len("COM256 - Failed to open"),
+        )
         for word in (
             "Unidentified",
             "Identified",
@@ -592,6 +712,14 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
             "Unknown Device",
         ):
             self.assertIn(word, samples)
+
+    def test_size_samples_include_device_labels(self):
+        label = "MUX Wiring MB607 Body Control Module"
+        samples = device_status_size_samples(label)
+        self.assertIn(label, samples)
+        self.assertIn("Unidentified", samples)
+        self.assertIn("Identified", samples)
+        self.assertEqual(longest_device_status_text(label), label)
 
     def test_ordinal_helper_teen_and_twenty_cases(self):
         self.assertEqual(english_ordinal(1), "1st")

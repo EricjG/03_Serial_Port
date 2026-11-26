@@ -19,6 +19,7 @@ from device_data import (
     format_controllers_text,
     format_device_column,
     format_usb_id,
+    catalog_identified_labels,
     identified_connected_label,
     load_device_file,
     load_devices_info_file,
@@ -579,6 +580,21 @@ class DevicesInfoFileTests(unittest.TestCase):
         self.assertEqual(
             identified_connected_label(None, None, "Revision 1.0 01/01/26"),
             "Revision 1.0 01/01/26",
+        )
+
+    def test_catalog_identified_labels_cover_shipped_files(self):
+        devices, error = load_device_file(str(DEVICES_JSON))
+        info, info_error = load_devices_info_file(str(DEVICES_INFO_JSON))
+        self.assertIsNone(error)
+        self.assertIsNone(info_error)
+        labels = catalog_identified_labels(devices, info)
+        self.assertIn("MUX Wiring MB607 Body Control Module", labels)
+        self.assertIn("SIMCom SIM7080", labels)
+        self.assertTrue(labels)
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertGreaterEqual(
+            max(len(text) for text in labels),
+            len("MUX Wiring MB607 Body Control Module"),
         )
 
 

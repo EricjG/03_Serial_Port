@@ -530,6 +530,84 @@ PORT_STATUS_VALUES = (
     PORT_STATUS_UNKNOWN,
 )
 
+PORT_STATUS_KIND_SELECTED = "selected"
+PORT_STATUS_KIND_OPENED = "opened"
+PORT_STATUS_KIND_IDENTIFIED = "identified"
+PORT_STATUS_KIND_FAILED = "failed"
+PORT_STATUS_SAMPLE_PORT = "COM256"
+
+_BOTTOM_PORT_STATUS_KIND_ALIASES = {
+    "selected": PORT_STATUS_KIND_SELECTED,
+    "closed": PORT_STATUS_KIND_SELECTED,
+    "unknown": PORT_STATUS_KIND_SELECTED,
+    "opened": PORT_STATUS_KIND_OPENED,
+    "open": PORT_STATUS_KIND_OPENED,
+    "identified": PORT_STATUS_KIND_IDENTIFIED,
+    "failed": PORT_STATUS_KIND_FAILED,
+    "fail": PORT_STATUS_KIND_FAILED,
+}
+
+
+def normalize_bottom_port_status_kind(kind):
+    """Map UI/event names onto selected / opened / identified / failed."""
+    if kind is None:
+        return PORT_STATUS_KIND_SELECTED
+    text = str(kind).strip()
+    if not text:
+        return PORT_STATUS_KIND_SELECTED
+    return _BOTTOM_PORT_STATUS_KIND_ALIASES.get(text.lower(), PORT_STATUS_KIND_SELECTED)
+
+
+def bottom_port_status_fields_from_serial_settings(settings=None):
+    """Open/Identify serial.Serial kwargs → Port Status fields."""
+    settings = settings or {}
+    return {
+        "baud": settings.get("baudrate"),
+        "data_bits": settings.get("bytesize", 8),
+        "parity": settings.get("parity", "N"),
+        "stop_bits": settings.get("stopbits", 1),
+    }
+
+
+def bottom_port_status_fields_from_device(device, baud=None):
+    """Scan/Identify device serial_parameters → Port Status fields."""
+    params = (device or {}).get("serial_parameters") or {}
+    return {
+        "baud": baud,
+        "data_bits": params.get("data_bits", params.get("bytesize", 8)),
+        "parity": params.get("parity", "N"),
+        "stop_bits": params.get("stop_bits", params.get("stopbits", 1)),
+    }
+
+
+def bottom_port_status_text(
+    port,
+    kind=PORT_STATUS_KIND_SELECTED,
+    baud=None,
+    data_bits=8,
+    parity="N",
+    stop_bits=1,
+    **_ignored,
+):
+    """Bottom Port Status. One helper for click / identify / open / fail.
+
+    Click or select: `COM8`. Identified or opened: `COM8 115.2K 8N1`.
+    Open failed: `COM8 - Failed to open`.
+    """
+    name = "" if port is None else str(port).strip()
+    if not name or name == "No Ports Available":
+        return ""
+    kind = normalize_bottom_port_status_kind(kind)
+    if kind == PORT_STATUS_KIND_FAILED:
+        return f"{name} - Failed to open"
+    if kind in (PORT_STATUS_KIND_OPENED, PORT_STATUS_KIND_IDENTIFIED) and baud is not None:
+        baud_text = format_baud_label(baud)
+        if not baud_text:
+            baud_text = str(baud)
+        frame = format_serial_frame(data_bits, parity, stop_bits)
+        return f"{name} {baud_text} {frame}"
+    return name
+
 # Values the Device Status box must fully show. Unidentified is the longest
 # of these; 10th/11th/21st-style failures are close behind.
 DEVICE_STATUS_VALUE_SAMPLES = (
@@ -557,29 +635,85 @@ def _unique_texts(*groups):
     return tuple(seen)
 
 
-def port_status_size_samples():
-    return PORT_STATUS_VALUES
+def port_status_size_samples(*extra):
+    """Every Port Status string the field must fully show."""
+    port = PORT_STATUS_SAMPLE_PORT
+    built = (
+        bottom_port_status_text(port, PORT_STATUS_KIND_SELECTED),
+        bottom_port_status_text(port, PORT_STATUS_KIND_FAILED),
+        bottom_port_status_text(
+            port,
+            PORT_STATUS_KIND_OPENED,
+            baud=921600,
+            data_bits=8,
+            parity="N",
+            stop_bits=1,
+        ),
+        bottom_port_status_text(
+            port,
+            PORT_STATUS_KIND_IDENTIFIED,
+            baud=115200,
+            data_bits=8,
+            parity="N",
+            stop_bits=1,
+        ),
+        bottom_port_status_text(
+            port,
+            PORT_STATUS_KIND_OPENED,
+            baud=460800,
+            data_bits=8,
+            parity="Space",
+            stop_bits=2,
+        ),
+        "COM8",
+        "COM8 - Failed to open",
+        "COM8 115.2K 8N1",
+        "COM8 460.8K 8N1",
+        "COM8 9.6K 8N1",
+        "COM8 300 8N1",
+        "COM8 1.2K 8N1",
+        "COM8 19.2K 8N1",
+        "COM8 921.6K 8N1",
+    )
+    catalog = []
+    for item in extra:
+        if item is None:
+            continue
+        if isinstance(item, (list, tuple)):
+            catalog.extend(str(text) for text in item if text)
+        else:
+            catalog.append(str(item))
+    return _unique_texts(built, catalog)
 
 
-def device_status_size_samples():
-    extra = [
+def device_status_size_samples(*extra):
+    """Every Device Status string the field must fully show.
+
+    extra is catalog Identified labels (devices.json + devices_info.json).
+    """
+    failures = [
         identify_failure_label(count)
         for count in (1, 2, 3, 4, 10, 11, 12, 13, 21, 22, 23, 24)
     ]
+    catalog = []
+    for item in extra:
+        if item is None:
+            continue
+        if isinstance(item, (list, tuple)):
+            catalog.extend(str(text) for text in item if text)
+        else:
+            catalog.append(str(item))
     return _unique_texts(
-        DEVICE_STATUS_VALUE_SAMPLES, extra, ("Unknown Device",)
+        DEVICE_STATUS_VALUE_SAMPLES, failures, ("Unknown Device",), catalog
     )
 
 
-def longest_port_status_text():
-    return max(PORT_STATUS_VALUES, key=len)
+def longest_port_status_text(*extra):
+    return max(port_status_size_samples(*extra), key=len)
 
 
-def longest_device_status_text():
-    samples = list(DEVICE_STATUS_VALUE_SAMPLES)
-    for count in (1, 2, 3, 4, 10, 11, 12, 13, 21, 22, 23, 24):
-        samples.append(identify_failure_label(count))
-    return max(samples, key=len)
+def longest_device_status_text(*extra):
+    return max(device_status_size_samples(*extra), key=len)
 
 
 def grid_ceil_px(px, grid=8):
@@ -616,24 +750,42 @@ def status_value_width_px(
 
 
 def device_status_text(
-    identified_device, selected_device, fail_count=0, fail_key=None
+    identified_device,
+    selected_device,
+    fail_count=0,
+    fail_key=None,
+    identified_label=None,
 ):
-    """Bottom Device Status. Unidentified until Identify or Scan Devices confirms."""
+    """Bottom Device Status. Unidentified until Identify or Scan Devices confirms.
+
+    When confirmed, identified_label is the same Connected Device column text
+    (identified_connected_label). Other states stay Unidentified / failure
+    ordinals.
+    """
     identified_key = device_identity_key(identified_device)
     selected_key = device_identity_key(selected_device)
     if identified_key and identified_key == selected_key:
-        return DEVICE_STATUS_IDENTIFIED
+        label = (identified_label or "").strip()
+        return label or DEVICE_STATUS_IDENTIFIED
     if fail_count and fail_key and fail_key == selected_key:
         return identify_failure_label(fail_count)
     return DEVICE_STATUS_UNIDENTIFIED
 
 
 def identified_device_message(
-    identified_device, selected_device, fail_count=0, fail_key=None
+    identified_device,
+    selected_device,
+    fail_count=0,
+    fail_key=None,
+    identified_label=None,
 ):
     """Bottom Device Status value. Unidentified until this port matches the dropdown device."""
     return device_status_text(
-        identified_device, selected_device, fail_count, fail_key
+        identified_device,
+        selected_device,
+        fail_count,
+        fail_key,
+        identified_label=identified_label,
     )
 
 

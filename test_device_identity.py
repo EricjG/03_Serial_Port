@@ -50,16 +50,20 @@ from picker_logic import (  # noqa: E402
     DATA_BITS_CHOICES,
     DEVICE_SCAN_DONE,
     DEVICE_SCANNING,
+    DEVICE_STATUS_UNIDENTIFIED,
     FLOW_CHOICES,
     MODE_AUTOMATIC,
     MODE_MANUAL,
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
+    bottom_port_status_text,
+    device_status_size_samples,
     exit_handoff_payload,
     format_port_scan_header,
     format_scan_usb_id,
     grid_ceil_px,
     identify_attempt_message,
+    port_status_size_samples,
 )
 from serial_port_app import SerialPortApp, UI_CONTROL_H, UI_PAD  # noqa: E402
 
@@ -393,6 +397,61 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
             ),
             "MUX Wiring MB607 Body Control Module",
         )
+
+    def test_identified_device_status_matches_connected_device_column(self):
+        app = _bare_app()
+        app.serial_ports = {"serial_ports": []}
+        app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
+        self.assertIsNone(error)
+        mb607 = _device_by_model("MB607")
+        sim = _device_by_model("SIM7080")
+        cases = (
+            (mb607, "Revision 1.23 01/15/24", "CP210x USB to UART Bridge Controller"),
+            (sim, "SIMCom SIM7080", "FTDI"),
+            (None, "Revision 1.0 01/01/26", "CP210x USB to UART Bridge Controller"),
+        )
+        for device, column, usb in cases:
+            connected = app._driver_or_device_column(
+                "Identified",
+                column,
+                usb,
+                "0x10C4:0xEA60",
+                device,
+            )
+            status = app._identified_connected_text(device, column)
+            if status:
+                self.assertEqual(connected, status)
+            self.assertEqual(
+                connected,
+                app._driver_or_device_column(
+                    "Identified", column, usb, "0x10C4:0xEA60", device
+                ),
+            )
+        self.assertEqual(
+            app._identified_connected_text(mb607, "Revision 1.23 01/15/24"),
+            "MUX Wiring MB607 Body Control Module",
+        )
+        self.assertEqual(
+            app._identified_connected_text(sim, "SIMCom SIM7080"),
+            "SIMCom SIM7080",
+        )
+
+    def test_device_status_size_samples_include_catalog_labels(self):
+        app = _bare_app()
+        app.device_definitions, error = load_device_file(str(DEVICES_JSON))
+        app.devices_info, info_error = load_devices_info_file(
+            str(ROOT / "devices_info.json")
+        )
+        self.assertIsNone(error)
+        self.assertIsNone(info_error)
+        samples = app._device_status_size_samples()
+        self.assertIn("MUX Wiring MB607 Body Control Module", samples)
+        self.assertIn("Unidentified", samples)
+        self.assertIn("Identified", samples)
+        self.assertIn("Unknown Device", samples)
+        baseline = device_status_size_samples()
+        for word in baseline:
+            self.assertIn(word, samples)
 
 
 class IdBaudColumnTests(unittest.TestCase):
@@ -962,6 +1021,100 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._refresh_baud_dropdown.assert_called_with(mb607, apply_default=False)
         self.assertEqual(app._identify_fail_count, 0)
         app.device_status_var.set.assert_called_with("Unidentified")
+
+    def test_identified_refresh_sets_connected_device_label(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app.device_definitions = {"devices": [mb607]}
+        app.serial_ports = {"serial_ports": []}
+        app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
+        self.assertIsNone(error)
+        app.port_data = [
+            (
+                "Identified",
+                "COM3",
+                "0x10C4:0xEA60",
+                "Revision 1.23 01/15/24",
+                "CP210x",
+                460800,
+            )
+        ]
+        app._identified_device_by_port = {"COM3": mb607}
+        app._identify_fail_count = 0
+        app._identify_fail_key = ("MUX Wiring", "MB607")
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.port_status_var = MagicMock()
+        app.device_status_var = MagicMock()
+        app.port_message_var = app.port_status_var
+        app.device_message_var = app.device_status_var
+
+        column = app._driver_or_device_column(
+            "Identified",
+            "Revision 1.23 01/15/24",
+            "CP210x",
+            "0x10C4:0xEA60",
+            mb607,
+        )
+        app._refresh_identified_device_message()
+        app.device_status_var.set.assert_called_with(column)
+        self.assertEqual(column, "MUX Wiring MB607 Body Control Module")
+        self.assertNotEqual(column, DEVICE_STATUS_UNIDENTIFIED)
+
+        app.settings_device_var.get.return_value = "SIMCom  SIM7080  115.2K Baud"
+        app._device_entries = [
+            ("MUX Wiring  MB607  460.8K Baud", mb607),
+            ("SIMCom  SIM7080  115.2K Baud", _device_by_model("SIM7080")),
+        ]
+        app._refresh_identified_device_message()
+        app.device_status_var.set.assert_called_with(DEVICE_STATUS_UNIDENTIFIED)
+
+    def test_port_status_click_identify_open_and_fail_text(self):
+        app = _bare_app()
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", _device_by_model("MB607"))]
+        app._port_bottom_status_by_port = {}
+        app.port_status_var = MagicMock()
+        app.device_status_var = MagicMock()
+        app.port_message_var = app.port_status_var
+        app.device_message_var = app.device_status_var
+
+        app._store_bottom_port_status("COM8")
+        app.port_status_var.set.assert_called_with("COM8")
+        self.assertEqual(bottom_port_status_text("COM8", "selected"), "COM8")
+
+        app._store_bottom_port_status(
+            "COM8",
+            "identified",
+            baud=115200,
+            data_bits=8,
+            parity="N",
+            stop_bits=1,
+        )
+        app.port_status_var.set.assert_called_with("COM8 115.2K 8N1")
+        app._show_bottom_port_status("COM8")
+        app.port_status_var.set.assert_called_with("COM8 115.2K 8N1")
+
+        app._store_bottom_port_status(
+            "COM8",
+            "opened",
+            baud=460800,
+            data_bits=8,
+            parity="N",
+            stop_bits=1,
+        )
+        app.port_status_var.set.assert_called_with("COM8 460.8K 8N1")
+
+        app._store_bottom_port_status("COM8", "failed")
+        app.port_status_var.set.assert_called_with("COM8 - Failed to open")
+
+        app._store_bottom_port_status("COM256", "failed")
+        app.port_status_var.set.assert_called_with("COM256 - Failed to open")
+        self.assertIn("COM256 - Failed to open", port_status_size_samples())
 
     def test_manual_device_pick_does_not_apply_port_settings(self):
         app = _bare_app()

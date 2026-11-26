@@ -15,6 +15,7 @@ import time
 from device_data import (
     baud_rates_for_device,
     baud_rates_for_picker,
+    catalog_identified_labels,
     command_steps,
     connected_device_label,
     default_baud,
@@ -39,13 +40,16 @@ from picker_logic import (
     DEFAULT_PARITY,
     FLOW_XOFF_XON,
     MODE_MANUAL,
-    PORT_STATUS_CLOSED,
-    PORT_STATUS_FAILED,
-    PORT_STATUS_OPENED,
-    PORT_STATUS_UNKNOWN,
+    PORT_STATUS_KIND_FAILED,
+    PORT_STATUS_KIND_IDENTIFIED,
+    PORT_STATUS_KIND_OPENED,
+    PORT_STATUS_KIND_SELECTED,
     DEVICE_STATUS_UNIDENTIFIED,
     apply_device_pick,
     apply_header_button_click,
+    bottom_port_status_fields_from_device,
+    bottom_port_status_fields_from_serial_settings,
+    bottom_port_status_text,
     check_button_char_width,
     device_identity_key,
     dropdown_ports,
@@ -1007,12 +1011,16 @@ class SerialPortApp:
         return widest
 
     def _size_outlined_status_value(self, widget, samples):
-        """Fit status samples from a temp Label's winfo_reqwidth, plus outline."""
+        """Fit status samples from a temp Label's winfo_reqwidth, plus outline.
+
+        The configured width is the minimum. Stretching Device Status may grow
+        the wrap with leftover space; it must never shrink below this.
+        """
         if widget is None:
-            return
+            return 0
         wrap = getattr(widget, "master", None)
         if wrap is None:
-            return
+            return 0
         if isinstance(samples, str):
             samples = (samples,)
         highlight = 1
@@ -1026,9 +1034,10 @@ class SerialPortApp:
         except (tk.TclError, TypeError, ValueError, AttributeError):
             wrap_w = 0
         if wrap_w <= 0:
-            return
+            return 0
         wrap.configure(width=wrap_w, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
+        return wrap_w
 
     def _pack_padx_total(self, child):
         try:
@@ -1046,17 +1055,43 @@ class SerialPortApp:
         return 2 * self._tk_px(parts[0] if parts else 0)
 
     def _grow_bottom_bar_to_status_fields(self):
-        """pack_propagate is off on the bottom row; request the children's width."""
+        """Keep Port/Device Status columns from shrinking below their font-sized min."""
         bar = getattr(self, "_bottom_bar", None)
         if bar is None:
-            return
+            return 0
         try:
             bar.update_idletasks()
-            need = 0
-            for child in bar.pack_slaves():
-                need += int(child.winfo_reqwidth()) + self._pack_padx_total(child)
-            if need > 0:
-                bar.configure(width=need, height=UI_CONTROL_H)
+            port_wrap = getattr(self, "_port_status_wrap", None)
+            device_wrap = getattr(self, "_device_status_wrap", None)
+            if port_wrap is not None:
+                bar.columnconfigure(1, minsize=int(port_wrap.winfo_reqwidth()), weight=0)
+            if device_wrap is not None:
+                bar.columnconfigure(3, minsize=int(device_wrap.winfo_reqwidth()), weight=1)
+            bar.update_idletasks()
+            return int(bar.winfo_reqwidth())
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return 0
+
+    def _catalog_identified_labels(self):
+        return catalog_identified_labels(
+            getattr(self, "device_definitions", None),
+            getattr(self, "devices_info", None),
+        )
+
+    def _device_status_size_samples(self):
+        return device_status_size_samples(*self._catalog_identified_labels())
+
+    def _raise_window_min_for_status_fields(self):
+        """If Device Status would clip, grow the window minimum instead."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        try:
+            root.update_idletasks()
+            req_w = int(root.winfo_reqwidth())
+            req_h = int(root.winfo_reqheight())
+            min_w, min_h = root.minsize()
+            root.minsize(max(int(min_w or 0), req_w), max(int(min_h or 0), req_h))
         except (tk.TclError, TypeError, ValueError, AttributeError):
             return
 
@@ -1065,9 +1100,11 @@ class SerialPortApp:
             getattr(self, "port_status_entry", None), port_status_size_samples()
         )
         self._size_outlined_status_value(
-            getattr(self, "device_status_entry", None), device_status_size_samples()
+            getattr(self, "device_status_entry", None),
+            self._device_status_size_samples(),
         )
         self._grow_bottom_bar_to_status_fields()
+        self._raise_window_min_for_status_fields()
 
     def _on_settings_field_click(self, _event=None):
         field = getattr(self, "settings_summary", None)
@@ -1258,6 +1295,8 @@ class SerialPortApp:
         port = selection[0]
         if self.settings_port_var.get() != port:
             self.settings_port_var.set(port)
+        else:
+            self._show_bottom_port_status(port)
 
     def _on_tree_double_click(self, _event=None):
         select_btn = getattr(self, "select_button", None)
@@ -1282,28 +1321,48 @@ class SerialPortApp:
             else:
                 device_var.set(device_text)
 
-    def _store_bottom_port_status(self, port, status):
+    def _store_bottom_port_status(self, port, kind=PORT_STATUS_KIND_SELECTED, **fields):
+        record = {"kind": kind}
+        for key in ("baud", "data_bits", "parity", "stop_bits"):
+            if key in fields:
+                record[key] = fields[key]
         if port:
-            self._port_bottom_status_by_port[port] = status
-        self._set_message_lines(port_text=status)
+            self._port_bottom_status_by_port[port] = record
+        self._set_message_lines(
+            port_text=bottom_port_status_text(port, **record) if port else ""
+        )
 
     def _show_bottom_port_status(self, port=None):
         if port is None:
             port = self._selected_port()
-        status = (
-            self._port_bottom_status_by_port.get(port, PORT_STATUS_CLOSED)
-            if port
-            else PORT_STATUS_CLOSED
-        )
-        self._set_message_lines(port_text=status)
+        if not port:
+            self._set_message_lines(port_text="")
+            return
+        record = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(port)
+        if isinstance(record, dict):
+            text = bottom_port_status_text(port, **record)
+        elif record:
+            text = bottom_port_status_text(port, record)
+        else:
+            text = bottom_port_status_text(port, PORT_STATUS_KIND_SELECTED)
+        self._set_message_lines(port_text=text)
 
     def _mark_port_status_unknown(self):
+        """Baud/Settings edits no longer overwrite Identified/Opened Port Status."""
         if self._suppress_port_status_event:
             return
         port = self._selected_port()
         if not port:
             return
-        self._store_bottom_port_status(port, PORT_STATUS_UNKNOWN)
+        record = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(port)
+        if isinstance(record, dict) and record.get("kind") in (
+            PORT_STATUS_KIND_OPENED,
+            PORT_STATUS_KIND_IDENTIFIED,
+            PORT_STATUS_KIND_FAILED,
+        ):
+            self._show_bottom_port_status(port)
+            return
+        self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
 
     def _set_identified_device(self, port, device):
         if not port:
@@ -1327,12 +1386,18 @@ class SerialPortApp:
         selected = None
         if getattr(self, "settings_device_var", None) is not None:
             selected = self._device_for_label(self.settings_device_var.get())
+        row = None
+        if port and getattr(self, "port_data", None) is not None:
+            row = self._port_row(port)
+        device_name = row[3] if row else getattr(self, "_matched_device_column", None)
+        identified_label = self._identified_connected_text(identified, device_name)
         self._set_message_lines(
             device_text=identified_device_message(
                 identified,
                 selected,
                 fail_count=getattr(self, "_identify_fail_count", 0),
                 fail_key=getattr(self, "_identify_fail_key", None),
+                identified_label=identified_label,
             )
         )
 
@@ -1514,12 +1579,12 @@ class SerialPortApp:
             row = self._port_row(port)
             status = "Identified" if row and row[3] else "Available"
             self._set_port_row(port, status=status, keep_device=True)
-            self._store_bottom_port_status(port, PORT_STATUS_CLOSED)
+            self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
             return
         self._release_serial()
         self._held_port = None
         if not self._reopen_held(port):
-            self._store_bottom_port_status(port, PORT_STATUS_FAILED)
+            self._store_bottom_port_status(port, PORT_STATUS_KIND_FAILED)
             return
         settings = self._serial_settings_from_ui()
         self._log(
@@ -1527,7 +1592,11 @@ class SerialPortApp:
             f"{self._format_settings_summary()}"
         )
         self._set_port_row(port, status="Open", keep_device=True)
-        self._store_bottom_port_status(port, PORT_STATUS_OPENED)
+        self._store_bottom_port_status(
+            port,
+            PORT_STATUS_KIND_OPENED,
+            **bottom_port_status_fields_from_serial_settings(settings),
+        )
 
     def _apply_connection_scan(self, port, found, settings, was_open, device=None):
         if found:
@@ -1549,6 +1618,11 @@ class SerialPortApp:
                 status="Identified",
                 device_name=found,
                 baud=settings.get("baudrate"),
+            )
+            self._store_bottom_port_status(
+                port,
+                PORT_STATUS_KIND_IDENTIFIED,
+                **bottom_port_status_fields_from_serial_settings(settings),
             )
             self._refresh_identified_device_message()
         else:
@@ -1913,53 +1987,68 @@ class SerialPortApp:
     def _build_bottom_bar(self, parent):
         """Port Status / Device Status inline left; Select then Exit on the right."""
         self._bottom_bar = parent
-        parent.configure(height=UI_CONTROL_H)
-        parent.pack_propagate(False)
+        parent.configure(height=UI_CONTROL_H, bg=UI_BOTTOM)
+        parent.rowconfigure(0, minsize=UI_CONTROL_H, weight=0)
+        # labels, port wrap, device wrap (stretch), Select, Exit
+        parent.columnconfigure(0, weight=0)
+        parent.columnconfigure(1, weight=0)
+        parent.columnconfigure(2, weight=0)
+        parent.columnconfigure(3, weight=1)
+        parent.columnconfigure(4, weight=0)
+        parent.columnconfigure(5, weight=0)
 
-        exit_wrap, self.exit_button = self._flat_button(
-            parent, "Exit", command=self._on_exit
-        )
-        exit_wrap.pack(side=tk.RIGHT)
-
-        select_wrap, self.select_button = self._flat_button(
-            parent, "Select", command=self._on_select_port
-        )
-        self.select_button.configure(state=tk.DISABLED)
-        select_wrap.pack(side=tk.RIGHT, padx=(0, UI_GAP))
-        self._select_wrap = select_wrap
-        self._exit_wrap = exit_wrap
-
-        status_row = tk.Frame(parent, bg=UI_BOTTOM, height=UI_CONTROL_H)
-        status_row.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.port_status_var = tk.StringVar(value=PORT_STATUS_CLOSED)
+        self.port_status_var = tk.StringVar(value="")
         self.device_status_var = tk.StringVar(value=DEVICE_STATUS_UNIDENTIFIED)
         self.port_message_var = self.port_status_var
         self.device_message_var = self.device_status_var
         self._status_wraps = []
 
-        def status_group(label, var, sample):
-            group = tk.Frame(status_row, bg=UI_BOTTOM, height=UI_CONTROL_H)
-            group.pack(side=tk.LEFT, padx=(0, UI_GROUP_GAP), fill=tk.Y)
-            tk.Label(
-                group,
-                text=label,
+        def status_label(column, text, padx):
+            widget = tk.Label(
+                parent,
+                text=text,
                 bg=UI_BOTTOM,
                 fg=UI_FG,
                 font=self._font_label,
                 anchor="w",
-            ).pack(side=tk.LEFT, padx=(0, UI_GAP), fill=tk.Y)
-            wrap, value = self._outlined_status_value(group, var)
-            wrap.pack(side=tk.LEFT, pady=0)
-            self._status_wraps.append(wrap)
-            self._size_outlined_status_value(value, sample)
-            return value
+            )
+            widget.grid(row=0, column=column, sticky="nsw", padx=padx)
+            return widget
 
-        self.port_status_entry = status_group(
-            "Port Status:", self.port_status_var, port_status_size_samples()
+        self._port_status_caption = status_label(0, "Port Status:", (0, UI_GAP))
+        port_wrap, self.port_status_entry = self._outlined_status_value(
+            parent, self.port_status_var
         )
-        self.device_status_entry = status_group(
-            "Device Status:", self.device_status_var, device_status_size_samples()
+        port_wrap.grid(row=0, column=1, sticky="nsw", padx=(0, UI_GROUP_GAP))
+        self._port_status_wrap = port_wrap
+        self._status_wraps.append(port_wrap)
+        self._size_outlined_status_value(
+            self.port_status_entry, port_status_size_samples()
         )
+
+        self._device_status_caption = status_label(2, "Device Status:", (0, UI_GAP))
+        device_wrap, self.device_status_entry = self._outlined_status_value(
+            parent, self.device_status_var
+        )
+        device_wrap.grid(row=0, column=3, sticky="nsew", padx=(0, UI_GROUP_GAP))
+        self._device_status_wrap = device_wrap
+        self._device_status_group = device_wrap
+        self._status_wraps.append(device_wrap)
+        self._size_outlined_status_value(
+            self.device_status_entry, self._device_status_size_samples()
+        )
+
+        select_wrap, self.select_button = self._flat_button(
+            parent, "Select", command=self._on_select_port
+        )
+        self.select_button.configure(state=tk.DISABLED)
+        select_wrap.grid(row=0, column=4, sticky="e", padx=(0, UI_GAP))
+        exit_wrap, self.exit_button = self._flat_button(
+            parent, "Exit", command=self._on_exit
+        )
+        exit_wrap.grid(row=0, column=5, sticky="e")
+        self._select_wrap = select_wrap
+        self._exit_wrap = exit_wrap
 
     def _on_exit(self):
         self._print_handoff_json(exit_handoff_payload())
@@ -1981,12 +2070,16 @@ class SerialPortApp:
             return self.format_baud(baud)
         return vendor_id if vendor_id else "Unknown"
 
+    def _identified_connected_text(self, identified_device, device_name=None):
+        """Same Identified string for the Connected Device column and Device Status."""
+        info = self._device_attributes_for(identified_device)
+        return identified_connected_label(info, identified_device, device_name)
+
     def _driver_or_device_column(
         self, status, device_name, description, vendor_id=None, identified_device=None
     ):
         if status == "Identified":
-            info = self._device_attributes_for(identified_device)
-            label = identified_connected_label(info, identified_device, device_name)
+            label = self._identified_connected_text(identified_device, device_name)
             if label:
                 return label
             if device_name:
@@ -2439,6 +2532,7 @@ class SerialPortApp:
                 if result is None:
                     # demote Identified → Available
                     self._set_identified_device(port, None)
+                    self._store_bottom_port_status(port, PORT_STATUS_KIND_SELECTED)
                     new_data.append(
                         ("Available", port, vendor_id, None, description, None)
                     )
@@ -2446,6 +2540,11 @@ class SerialPortApp:
                     name, found_baud, found_def = result
                     self._set_identified_device(port, found_def)
                     self._note_scan_identified(found_def, name, port)
+                    self._store_bottom_port_status(
+                        port,
+                        PORT_STATUS_KIND_IDENTIFIED,
+                        **bottom_port_status_fields_from_device(found_def, found_baud),
+                    )
                     new_data.append(
                         (
                             "Identified",
@@ -2590,11 +2689,18 @@ class SerialPortApp:
         self._identified_device_by_port = dict(identified_map or {})
         for port, found_def in self._identified_device_by_port.items():
             name = ""
+            found_baud = None
             for entry in port_data:
                 if entry[1] == port:
                     name = entry[3] or ""
+                    found_baud = entry[5]
                     break
             self._note_scan_identified(found_def, name, port)
+            self._store_bottom_port_status(
+                port,
+                PORT_STATUS_KIND_IDENTIFIED,
+                **bottom_port_status_fields_from_device(found_def, found_baud),
+            )
         self._refresh_device_ui(apply_baud=not self._held_port)
         self.known_ports = known_ports
         self.port_data = port_data
