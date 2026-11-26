@@ -34,7 +34,7 @@ Version: 3.0 — picker behavior from slides 2-3 and the shared theme (Decided i
 - Bold UI text
 - **Status** / **Port** / **Baud** / **Port Settings**: labels centered above their box
 - **Status** words: **Available** / **In Use** / **Open** / **Identified**; **None Available** when there are no ports
-- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item
+- **Port** / **Baud**: editable combobox; no `* All *` or `* Manual Entry *` item. Baud lists the selected device's `baud_rates`; if that list is missing, the standard baud list is used.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
 - Port dropdown lists Available / Open / Identified ports; In Use ports only when the In Use checkbox is on
 - **Port Settings**: white button, default `8 - 1 - None - None` (Data - Stop - Parity - Flow); single-click opens the dialog
@@ -62,7 +62,7 @@ Version: 3.0 — picker behavior from slides 2-3 and the shared theme (Decided i
 When the list is empty, only the header buttons and Exit stay enabled.
 
 ## 4th — Bottom
-- White bar; two message lines on the left replace a Status box, e.g. `Port: COM4 is Closed` and `Device: {Manufacturer} {Model} {Short Description}`
+- White bar; two message lines on the left replace a Status box, e.g. `Port: COM4 is Closed` and `Device: Unknown Device` until Identify or Scan Devices confirms the selected dropdown device on that port, then `Device: {Manufacturer} {Model} {Short Description}`
 - **Exit** then **Select** on the right (**Select** furthest right)
 - Button text center-aligned
 

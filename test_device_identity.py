@@ -35,20 +35,27 @@ def _install_import_stubs():
 
 _install_import_stubs()
 
+from device_data import (  # noqa: E402
+    device_matches_ids,
+    format_device_column,
+    load_device_file,
+)
 from device_editor import DeviceEditorApp  # noqa: E402
 from serial_port_app import SerialPortApp  # noqa: E402
 
 
 def _load_definitions():
-    with open(DEVICES_JSON, encoding="utf-8") as handle:
-        return json.load(handle)
+    payload, error = load_device_file(str(DEVICES_JSON))
+    assert error is None, error
+    return payload
 
 
 def _device_by_model(model, baudrate=None):
     for device in _load_definitions()["devices"]:
         if device["model"] != model:
             continue
-        if baudrate is None or device["serial_parameters"]["baudrate"] == baudrate:
+        rates = device["serial_parameters"]["baud_rates"]
+        if baudrate is None or baudrate in rates:
             return device
     raise AssertionError(f"No devices.json entry for {model!r}")
 
@@ -57,7 +64,7 @@ def _devices_for_vid(vendor_id):
     return [
         device
         for device in _load_definitions()["devices"]
-        if SerialPortApp._vendor_id_in_list(vendor_id, device["vendor_ids"])
+        if device_matches_ids(device, vendor_id)
     ]
 
 
@@ -113,9 +120,10 @@ class DevicesJsonLoadTests(unittest.TestCase):
 
     def test_each_device_has_the_fields_the_apps_read(self):
         required = (
-            "vendor_ids",
+            "controllers",
             "manufacturer",
             "model",
+            "type",
             "serial_parameters",
             "commands",
             "response",
@@ -123,10 +131,14 @@ class DevicesJsonLoadTests(unittest.TestCase):
         for device in _load_definitions()["devices"]:
             for field in required:
                 self.assertIn(field, device, msg=f"missing {field} on {device}")
-            self.assertIsInstance(device["vendor_ids"], list)
-            self.assertIn("baudrate", device["serial_parameters"])
+            self.assertIsInstance(device["controllers"], list)
+            self.assertIsInstance(device["type"], str)
+            self.assertIn("baud_rates", device["serial_parameters"])
+            self.assertGreaterEqual(len(device["serial_parameters"]["baud_rates"]), 1)
             self.assertIn("initialize", device["commands"])
             self.assertIn("identify", device["commands"])
+            self.assertIn("pause_ms", device["commands"]["initialize"])
+            self.assertIn("pause_ms", device["commands"]["identify"])
             self.assertIn("regex", device["response"])
             self.assertIn("device_column", device["response"])
 
@@ -143,8 +155,15 @@ class VendorIdMatchTests(unittest.TestCase):
             ["SIM7080"],
         )
         self.assertEqual(
-            [(d["model"], d["serial_parameters"]["baudrate"]) for d in _devices_for_vid("4292")],
-            [("MB607", 460800), ("MB607", 115200)],
+            [
+                (d["model"], d["serial_parameters"]["baud_rates"])
+                for d in _devices_for_vid("4292")
+            ],
+            [("MB607", [460800, 115200])],
+        )
+        self.assertEqual(
+            [d["model"] for d in _devices_for_vid("0x10C4")],
+            ["MB607"],
         )
         self.assertEqual(
             [d["model"] for d in _devices_for_vid("1234")],
@@ -162,6 +181,8 @@ class VendorIdMatchTests(unittest.TestCase):
     def test_vendor_id_int_and_str_are_the_same_match(self):
         self.assertTrue(SerialPortApp._vendor_id_in_list(4292, ["4292"]))
         self.assertTrue(SerialPortApp._vendor_id_in_list("4292", [4292]))
+        self.assertTrue(SerialPortApp._vendor_id_in_list("0x10C4", ["4292"]))
+        self.assertTrue(SerialPortApp._vendor_id_in_list(4292, ["0x10C4"]))
         self.assertFalse(SerialPortApp._vendor_id_in_list("1027", ["4292"]))
 
 
@@ -172,6 +193,10 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.group("revision"), "1.23 01/15/24")
         self.assertEqual(
+            format_device_column(device, match.groupdict()),
+            "Revision 1.23 01/15/24",
+        )
+        self.assertEqual(
             SerialPortApp._connected_device_label(device),
             "MUX Wiring MB607 - BCM with 7-Inputs 6-Outputs & CAN bus",
         )
@@ -181,6 +206,10 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
         match = re.search(device["response"]["regex"], "SIMCOM_SIM7080")
         self.assertIsNotNone(match)
         self.assertEqual(match.group("model"), "SIM7080")
+        self.assertEqual(
+            format_device_column(device, match.groupdict()),
+            "SIMCom SIM7080",
+        )
         self.assertEqual(
             SerialPortApp._connected_device_label(device),
             "SIMCom SIM7080",
@@ -195,6 +224,10 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.group("serial"), "12345")
         self.assertEqual(match.group("firmware"), "2.0")
+        self.assertEqual(
+            format_device_column(device, match.groupdict()),
+            "Rohde & Schwarz HMP4040 (S/N: 12345, FW: 2.0)",
+        )
         self.assertEqual(
             SerialPortApp._connected_device_label(device),
             "Rohde & Schwarz HMP4040",
@@ -256,17 +289,15 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         with patch("serial_port_app.serial.Serial", FakeSerial), patch(
             "serial_port_app.time.sleep"
         ):
-            return app._identify_device_with_defs(
+            result = app._identify_device_with_defs(
                 port, vendor_id, definitions or _load_definitions()
             )
+            return result[0], result[1]
 
     def test_matching_reply_returns_label_and_baud(self):
         FakeSerial.response = b"junk RevPK1.23 01/15/24 more"
         label, baud = self._identify("COM5", "4292")
-        self.assertEqual(
-            label,
-            "MUX Wiring MB607 - BCM with 7-Inputs 6-Outputs & CAN bus",
-        )
+        self.assertEqual(label, "Revision 1.23 01/15/24")
         self.assertEqual(baud, 460800)
         self.assertEqual(FakeSerial.instances[0].written, [b"\r\r", b"I\r"])
 
@@ -290,14 +321,11 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertIsNone(label)
         self.assertIsNone(baud)
 
-    def test_open_failure_on_first_baud_tries_next_definition(self):
+    def test_open_failure_on_first_baud_tries_next_baud_in_the_list(self):
         FakeSerial.fail_baudrates = (460800,)
         FakeSerial.response = b"RevPK1.23 01/15/24"
         label, baud = self._identify("COM5", "4292")
-        self.assertEqual(
-            label,
-            "MUX Wiring MB607 - BCM with 7-Inputs 6-Outputs & CAN bus",
-        )
+        self.assertEqual(label, "Revision 1.23 01/15/24")
         self.assertEqual(baud, 115200)
 
     def test_probe_open_port_uses_the_same_regex(self):
@@ -313,6 +341,68 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             self.assertFalse(app._probe_open_port(ser, device))
         empty = _device_by_model("S-Woom32")
         self.assertFalse(app._probe_open_port(ser, empty))
+
+    def test_old_schema_definitions_still_identify(self):
+        old = {
+            "devices": [
+                {
+                    "vendor_ids": ["4292"],
+                    "manufacturer": "MUX Wiring",
+                    "model": "MB607",
+                    "serial_parameters": {
+                        "baudrate": 115200,
+                        "parity": "N",
+                        "stopbits": 1,
+                        "bytesize": 8,
+                    },
+                    "commands": {
+                        "initialize": {"message": "\r\r", "pause": 1},
+                        "identify": {"message": "I\r", "pause": 1},
+                    },
+                    "response": {
+                        "regex": "RevPK(?P<revision>\\d+\\.\\d+ \\d{2}/\\d{2}/\\d{2})",
+                        "device_column": "Revision {revision}",
+                    },
+                }
+            ]
+        }
+        FakeSerial.response = b"RevPK1.23 01/15/24"
+        label, baud = self._identify("COM5", "4292", definitions=old)
+        self.assertEqual(label, "Revision 1.23 01/15/24")
+        self.assertEqual(baud, 115200)
+
+    def test_identify_sleeps_pause_ms(self):
+        FakeSerial.response = b"SIMCOM_SIM7080"
+        app = _bare_app()
+        with patch("serial_port_app.serial.Serial", FakeSerial), patch(
+            "serial_port_app.time.sleep"
+        ) as slept:
+            app._identify_device_with_defs("COM5", "1027", _load_definitions())
+        slept.assert_any_call(1.0)
+        slept.assert_any_call(2.0)
+
+
+class BaudDropdownTests(unittest.TestCase):
+    def test_device_baud_list_is_short_labels(self):
+        app = _bare_app()
+        device = _device_by_model("MB607")
+        self.assertEqual(app._baud_labels_for_device(device), ["460.8K", "115.2K"])
+        self.assertEqual(app._baud_labels_for_device(_device_by_model("SIM7080")), ["115.2K"])
+        standard = app._baud_labels_for_device(None)
+        self.assertEqual(standard[0], "300")
+        self.assertIn("115.2K", standard)
+        self.assertIn("921.6K", standard)
+
+    def test_missing_devices_file_keeps_error_on_device_line(self):
+        app = _bare_app()
+        app._devices_load_error = "devices.json is missing — no known devices."
+        app._device_entries = []
+        app.port_message_var = MagicMock()
+        app.device_message_var = MagicMock()
+        app._set_message_lines(port_text="Port: None Available", device_text="Device:")
+        app.device_message_var.set.assert_called_with(
+            "devices.json is missing — no known devices."
+        )
 
 
 class DeviceEditorLoadTests(unittest.TestCase):
