@@ -50,9 +50,7 @@ from picker_logic import (  # noqa: E402
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
     exit_handoff_payload,
-    longest_device_status_text,
-    longest_port_status_text,
-    status_value_width_px,
+    grid_ceil_px,
 )
 from serial_port_app import SerialPortApp, UI_CONTROL_H, UI_PAD  # noqa: E402
 
@@ -575,51 +573,34 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         self.assertEqual(exit_handoff_payload(), {"result": None})
         self.assertEqual(json.dumps(exit_handoff_payload()), '{"result": null}')
 
-    def test_status_fields_fit_longest_value_on_8px_grid(self):
+    def test_status_fields_size_from_label_reqwidth(self):
         app = _bare_app()
-        font = MagicMock()
-        font.measure.side_effect = lambda s: len(str(s)) * 8
-        app._widget_font = lambda _widget: font
-        app._control_font = font
 
         def make_value():
             wrap = MagicMock()
             wrap.cget.side_effect = lambda key: 1 if key == "highlightthickness" else 0
             label = MagicMock()
             label.master = wrap
-            label.cget.side_effect = lambda key: 4 if key == "padx" else 0
             return wrap, label
 
         device_wrap, device_label = make_value()
         port_wrap, port_label = make_value()
         app.device_status_entry = device_label
         app.port_status_entry = port_label
+        app._bottom_bar = None
+        app._status_label_reqwidth = lambda widget, samples: (
+            100 if widget is device_label else 80
+        )
 
         app._size_status_fields()
 
-        font.measure.assert_any_call(longest_device_status_text())
-        font.measure.assert_any_call(longest_port_status_text())
-        device_w = status_value_width_px(
-            len(longest_device_status_text()) * 8,
-            padx=4,
-            border=0,
-            highlight=1,
-            grid=UI_PAD,
-            slack=UI_PAD,
-        )
-        port_w = status_value_width_px(
-            len(longest_port_status_text()) * 8,
-            padx=4,
-            border=0,
-            highlight=1,
-            grid=UI_PAD,
-            slack=UI_PAD,
-        )
+        device_w = grid_ceil_px(100 + 2, UI_PAD)
+        port_w = grid_ceil_px(80 + 2, UI_PAD)
         device_wrap.configure.assert_called_with(width=device_w, height=UI_CONTROL_H)
         port_wrap.configure.assert_called_with(width=port_w, height=UI_CONTROL_H)
+        self.assertGreaterEqual(device_w, 100)
+        self.assertGreaterEqual(port_w, 80)
         self.assertEqual(device_w % UI_PAD, 0)
-        self.assertGreater(device_w, port_w)
-        device_label.configure.assert_not_called()
 
     def test_unknown_port_without_device_uses_standard_baud_dropdown(self):
         app = _bare_app()

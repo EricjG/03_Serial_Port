@@ -52,10 +52,10 @@ from picker_logic import (
     format_settings_text,
     format_vid_pid,
     identified_device_message,
-    longest_device_status_text,
-    longest_port_status_text,
+    device_status_size_samples,
+    grid_ceil_px,
     longest_settings_text,
-    status_value_width_px,
+    port_status_size_samples,
     picker_control_state,
     picker_device_label,
     record_identify_failure,
@@ -874,12 +874,20 @@ class SerialPortApp:
 
     def _widget_font(self, widget):
         """Font the widget is actually drawing (Segoe UI or the Linux fallback)."""
+        spec = None
         try:
             spec = widget.cget("font")
-            if spec:
+        except (tk.TclError, TypeError, AttributeError):
+            spec = None
+        if spec:
+            try:
+                return tkfont.nametofont(spec)
+            except (tk.TclError, TypeError, ValueError):
+                pass
+            try:
                 return tkfont.Font(font=spec)
-        except (tk.TclError, TypeError, ValueError):
-            pass
+            except (tk.TclError, TypeError, ValueError):
+                pass
         return self._control_font
 
     def _tk_px(self, value):
@@ -893,48 +901,102 @@ class SerialPortApp:
         except (TypeError, ValueError):
             return 0
 
-    def _size_outlined_status_value(self, widget, sample):
-        """Fit `sample` using Font.measure on the widget font, in pixels."""
+    def _status_label_reqwidth(self, widget, samples):
+        """Natural width of a temp Label using the widget's resolved font."""
+        font = self._widget_font(widget)
+        padx = 4
+        pady = 0
+        bd = 0
+        highlight = 0
+        try:
+            padx = self._tk_px(widget.cget("padx"))
+            pady = self._tk_px(widget.cget("pady"))
+            bd = self._tk_px(widget.cget("bd"))
+            highlight = self._tk_px(widget.cget("highlightthickness"))
+        except (tk.TclError, TypeError, AttributeError):
+            pass
+        probe = tk.Label(
+            self.root,
+            font=font,
+            padx=padx,
+            pady=pady,
+            bd=bd,
+            highlightthickness=highlight,
+            anchor="w",
+            justify="left",
+        )
+        widest = 0
+        try:
+            for sample in samples:
+                probe.configure(text=str(sample))
+                probe.update_idletasks()
+                widest = max(widest, int(probe.winfo_reqwidth()))
+        finally:
+            probe.destroy()
+        return widest
+
+    def _size_outlined_status_value(self, widget, samples):
+        """Fit status samples from a temp Label's winfo_reqwidth, plus outline."""
         if widget is None:
             return
         wrap = getattr(widget, "master", None)
         if wrap is None:
             return
-        font = self._widget_font(widget)
-        try:
-            text_px = int(font.measure(str(sample)))
-        except (TypeError, ValueError, tk.TclError):
-            text_px = int(self._control_font.measure(str(sample)))
-        padx = 4
-        bd = 0
+        if isinstance(samples, str):
+            samples = (samples,)
         highlight = 1
         try:
-            padx = self._tk_px(widget.cget("padx"))
-            bd = self._tk_px(widget.cget("bd"))
-        except (tk.TclError, TypeError):
+            highlight = self._tk_px(wrap.cget("highlightthickness"))
+        except (tk.TclError, TypeError, AttributeError):
             pass
         try:
-            highlight = self._tk_px(wrap.cget("highlightthickness"))
-        except (tk.TclError, TypeError):
-            pass
-        wrap_w = status_value_width_px(
-            text_px,
-            padx=padx,
-            border=bd,
-            highlight=highlight,
-            grid=UI_PAD,
-            slack=UI_PAD,
-        )
+            text_w = self._status_label_reqwidth(widget, samples)
+            wrap_w = grid_ceil_px(text_w + 2 * highlight, UI_PAD)
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            wrap_w = 0
+        if wrap_w <= 0:
+            return
         wrap.configure(width=wrap_w, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
 
+    def _pack_padx_total(self, child):
+        try:
+            info = child.pack_info()
+        except tk.TclError:
+            return 0
+        padx = info.get("padx", 0)
+        if isinstance(padx, (tuple, list)):
+            if len(padx) >= 2:
+                return self._tk_px(padx[0]) + self._tk_px(padx[-1])
+            return 2 * self._tk_px(padx[0] if padx else 0)
+        parts = str(padx).split()
+        if len(parts) >= 2:
+            return self._tk_px(parts[0]) + self._tk_px(parts[-1])
+        return 2 * self._tk_px(parts[0] if parts else 0)
+
+    def _grow_bottom_bar_to_status_fields(self):
+        """pack_propagate is off on the bottom row; request the children's width."""
+        bar = getattr(self, "_bottom_bar", None)
+        if bar is None:
+            return
+        try:
+            bar.update_idletasks()
+            need = 0
+            for child in bar.pack_slaves():
+                need += int(child.winfo_reqwidth()) + self._pack_padx_total(child)
+            if need > 0:
+                bar.configure(width=need, height=UI_CONTROL_H)
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return
+
     def _size_status_fields(self):
         self._size_outlined_status_value(
-            getattr(self, "port_status_entry", None), longest_port_status_text()
+            getattr(self, "port_status_entry", None), port_status_size_samples()
         )
         self._size_outlined_status_value(
-            getattr(self, "device_status_entry", None), longest_device_status_text()
+            getattr(self, "device_status_entry", None), device_status_size_samples()
         )
+        self._grow_bottom_bar_to_status_fields()
 
     def _on_settings_field_click(self, _event=None):
         field = getattr(self, "settings_summary", None)
@@ -1683,6 +1745,7 @@ class SerialPortApp:
 
     def _build_bottom_bar(self, parent):
         """Port Status / Device Status inline left; Select then Exit on the right."""
+        self._bottom_bar = parent
         parent.configure(height=UI_CONTROL_H)
         parent.pack_propagate(False)
 
@@ -1725,10 +1788,10 @@ class SerialPortApp:
             return value
 
         self.port_status_entry = status_group(
-            "Port Status:", self.port_status_var, longest_port_status_text()
+            "Port Status:", self.port_status_var, port_status_size_samples()
         )
         self.device_status_entry = status_group(
-            "Device Status:", self.device_status_var, longest_device_status_text()
+            "Device Status:", self.device_status_var, device_status_size_samples()
         )
 
     def _on_exit(self):

@@ -375,6 +375,29 @@ DEVICE_STATUS_VALUE_SAMPLES = (
 )
 
 
+def _unique_texts(*groups):
+    seen = []
+    for group in groups:
+        for text in group:
+            if text not in seen:
+                seen.append(text)
+    return tuple(seen)
+
+
+def port_status_size_samples():
+    return PORT_STATUS_VALUES
+
+
+def device_status_size_samples():
+    extra = [
+        identify_failure_label(count)
+        for count in (1, 2, 3, 4, 10, 11, 12, 13, 21, 22, 23, 24)
+    ]
+    return _unique_texts(
+        DEVICE_STATUS_VALUE_SAMPLES, extra, ("Unknown Device",)
+    )
+
+
 def longest_port_status_text():
     return max(PORT_STATUS_VALUES, key=len)
 

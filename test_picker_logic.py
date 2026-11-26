@@ -19,6 +19,7 @@ from picker_logic import (
     check_button_char_width,
     device_identity_key,
     device_message_text,
+    device_status_size_samples,
     device_status_text,
     dropdown_ports,
     english_ordinal,
@@ -534,6 +535,14 @@ class IdentifyFailureOrdinalTests(unittest.TestCase):
         self.assertEqual(longest_port_status_text(), "Unknown")
         for word in ("Closed", "Opened", "Failed", "Unknown"):
             self.assertLessEqual(len(word), len(longest_port_status_text()))
+        samples = device_status_size_samples()
+        for word in (
+            "Unidentified",
+            "Identified",
+            "3rd Failure",
+            "Unknown Device",
+        ):
+            self.assertIn(word, samples)
 
     def test_ordinal_helper_teen_and_twenty_cases(self):
         self.assertEqual(english_ordinal(1), "1st")
