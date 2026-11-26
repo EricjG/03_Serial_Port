@@ -562,22 +562,55 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.device_status_var.get.return_value = "Identified"
 
         payload = app._select_handoff_payload()
-        self.assertEqual(payload["result"], "select")
+        self.assertEqual(
+            set(payload),
+            {
+                "port",
+                "baud",
+                "data_bits",
+                "stop_bits",
+                "parity",
+                "flow_control",
+                "device",
+            },
+        )
         self.assertEqual(payload["port"], "COM3")
         self.assertEqual(payload["baud"], 115200)
-        self.assertEqual(payload["settings"], "8 - 1 - None - None")
         self.assertEqual(payload["data_bits"], 8)
         self.assertEqual(payload["stop_bits"], 1)
-        self.assertEqual(payload["device"]["model"], "MB607")
-        self.assertEqual(payload["device"]["device_column"], "Revision 1.0 01/01/26")
-        self.assertEqual(payload["port_hardware"]["manufacturer"], "FTDI")
-        self.assertEqual(payload["device_attributes"]["model"], "MB607")
+        self.assertEqual(payload["parity"], "None")
+        self.assertEqual(payload["flow_control"], "None")
+        self.assertEqual(
+            payload["device"],
+            {
+                "manufacturer": "MUX Wiring",
+                "model": "MB607",
+                "short_description": "Body Control Module",
+            },
+        )
+        for dropped in (
+            "result",
+            "settings",
+            "port_status",
+            "device_status",
+            "port_hardware",
+            "device_attributes",
+        ):
+            self.assertNotIn(dropped, payload)
+        self.assertNotIn("type", payload["device"])
+        self.assertNotIn("long_description", payload["device"])
+        self.assertNotIn("device_column", payload["device"])
+
+        app._identified_device_by_port = {}
+        unidentified = app._select_handoff_payload()
+        self.assertEqual(unidentified["port"], "COM3")
+        self.assertIsNone(unidentified["device"])
 
         app.settings_port_var.get.return_value = ""
         app.port_data = []
         empty = app._select_handoff_payload()
-        self.assertEqual(empty["result"], "select")
         self.assertIsNone(empty["port"])
+        self.assertIsNone(empty["device"])
 
     def test_exit_payload_is_null_result(self):
         self.assertEqual(exit_handoff_payload(), {"result": None})

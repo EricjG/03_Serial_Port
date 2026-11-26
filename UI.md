@@ -71,7 +71,7 @@ Version: 3.4 — Baud list from serial_ports.json (Nov 26, 2026).
 - **Device** dropdown format: `Manufacturer  model  115.2K Baud` (two spaces between fields; baud is that device's first listed rate). Labels stay unique: a second copy of the same name gets ` (2)`
 - Picking a Device changes **Device Status** (back to **Unidentified**) and resets the Identify failure count. It does **not** change Settings or Port Status. The Baud *list* stays the chip/standard list (it does not shrink to the device's rates). If the device's first baud is already in that list, Baud preselects it; if not, the list is unchanged, nothing is added, Baud stays as shown, and a note is logged
 - **Identify** probes only the device shown in the Device dropdown, using the current settings. Enabled only when this app has the port open. Identify failure does not change Port Status
-- **Select** prints a JSON handoff object to stdout (indented), closes the open port, then quits. If no port is chosen, it prints JSON with `"port": null` and stays open
+- **Select** prints JSON (indented) of the open-port specs (`port`, `baud`, `data_bits`, `stop_bits`, `parity`, `flow_control`) plus `device` (`manufacturer`, `model`, `short_description` after Identify/Scan, otherwise `null`), closes the open port, then quits. If no port is chosen, it prints JSON with `"port": null` and stays open
 - **Exit** and the window X print `{"result": null}`, close the open port, then quit
 - No Status field in this box
 

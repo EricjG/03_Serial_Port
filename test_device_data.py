@@ -448,8 +448,15 @@ class DevicesInfoFileTests(unittest.TestCase):
             "long_description": "from devices.json",
         }
         fields = device_identity_fields(info, device, "Revision 1.0 01/01/26")
-        self.assertEqual(fields["short_description"], "Body Control Module")
-        self.assertEqual(fields["device_column"], "Revision 1.0 01/01/26")
+        self.assertEqual(
+            fields,
+            {
+                "manufacturer": "MUX Wiring",
+                "model": "MB607",
+                "short_description": "Body Control Module",
+            },
+        )
+        self.assertIsNone(device_identity_fields(None, None))
         self.assertEqual(
             identified_connected_label(info, device, "Revision 1.0 01/01/26"),
             "MUX Wiring MB607 Body Control Module",

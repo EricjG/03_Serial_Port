@@ -623,12 +623,15 @@ def identified_connected_label(info, device, device_column=None):
 
 
 def device_identity_fields(info, device, device_column=""):
-    """Select-payload device block; blank strings when unknown."""
+    """Select-payload device block: manufacturer, model, short_description.
+
+    Prefer devices_info.json, then devices.json. Returns None when no device
+    was identified. device_column is ignored (kept so older callers still run).
+    """
+    if not device:
+        return None
     return {
         "manufacturer": prefer_info_field(info, device, "manufacturer", "") or "",
         "model": prefer_info_field(info, device, "model", "") or "",
-        "type": prefer_info_field(info, device, "type", "") or "",
         "short_description": prefer_info_field(info, device, "short_description", "") or "",
-        "long_description": prefer_info_field(info, device, "long_description", "") or "",
-        "device_column": device_column or "",
     }

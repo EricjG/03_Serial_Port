@@ -1545,22 +1545,15 @@ class SerialPortApp:
     def _select_handoff_payload(self):
         port = self._selected_port() if hasattr(self, "_selected_port") else None
         baud = None
-        settings = None
         data_bits = None
         stop_bits = None
         parity = None
         flow_control = None
-        port_status = None
-        device_status = None
         try:
             if getattr(self, "settings_baud_var", None) is not None:
                 baud = self._parse_baud(self.settings_baud_var.get())
         except (TypeError, ValueError):
             baud = None
-        if getattr(self, "settings_summary_var", None) is not None:
-            settings = self.settings_summary_var.get() or None
-        elif hasattr(self, "_format_settings_summary"):
-            settings = self._format_settings_summary()
         try:
             if getattr(self, "settings_data_var", None) is not None:
                 data_bits = int(float(self.settings_data_var.get() or 8))
@@ -1578,55 +1571,21 @@ class SerialPortApp:
             parity = self.settings_parity_var.get() or None
         if getattr(self, "settings_flow_var", None) is not None:
             flow_control = self.settings_flow_var.get() or None
-        if port:
-            port_status = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(
-                port
-            )
-            if port_status is None and getattr(self, "port_status_var", None) is not None:
-                port_status = self.port_status_var.get()
-        elif getattr(self, "port_status_var", None) is not None:
-            port_status = self.port_status_var.get()
-        selected = None
-        if getattr(self, "settings_device_var", None) is not None:
-            selected = self._device_for_label(self.settings_device_var.get())
         identified = None
         if port:
             identified = (getattr(self, "_identified_device_by_port", None) or {}).get(
                 port
             )
-        device_status = identified_device_message(
-            identified,
-            selected,
-            fail_count=getattr(self, "_identify_fail_count", 0),
-            fail_key=getattr(self, "_identify_fail_key", None),
-        )
-        if getattr(self, "device_status_var", None) is not None:
-            shown = self.device_status_var.get()
-            if shown:
-                device_status = shown
-        info = self._device_attributes_for(selected or identified)
-        hardware = self._port_hardware_for(port)
-        device_column = ""
-        if port:
-            row = self._port_row(port) if hasattr(self, "_port_row") else None
-            if row and row[0] == "Identified" and row[3]:
-                device_column = row[3]
-        if not device_column:
-            device_column = getattr(self, "_matched_device_column", "") or ""
-        identity = device_identity_fields(info, selected or identified, device_column)
+        info = self._device_attributes_for(identified) if identified else None
+        identity = device_identity_fields(info, identified) if identified else None
         return select_handoff_payload(
             port=port,
             baud=baud,
-            settings=settings,
             data_bits=data_bits,
             stop_bits=stop_bits,
             parity=parity,
             flow_control=flow_control,
-            port_status=port_status,
-            device_status=device_status,
             device=identity,
-            port_hardware=hardware,
-            device_attributes=info,
         )
 
     def _on_connection_scan_device(self):

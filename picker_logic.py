@@ -524,55 +524,40 @@ def record_identify_failure(device, fail_count=0, fail_key=None):
     }
 
 
-def blank_device_identity():
-    return {
-        "manufacturer": "",
-        "model": "",
-        "type": "",
-        "short_description": "",
-        "long_description": "",
-        "device_column": "",
-    }
-
-
 def exit_handoff_payload():
     """Window X / Exit: empty result for the calling app."""
     return {"result": None}
+
+
+_SELECT_DEVICE_KEYS = ("manufacturer", "model", "short_description")
 
 
 def select_handoff_payload(
     *,
     port=None,
     baud=None,
-    settings=None,
     data_bits=None,
     stop_bits=None,
     parity=None,
     flow_control=None,
-    port_status=None,
-    device_status=None,
     device=None,
-    port_hardware=None,
-    device_attributes=None,
 ):
-    """Select preview payload. Prefer null over dropping a key."""
-    identity = blank_device_identity()
-    if isinstance(device, dict):
-        identity.update(device)
+    """Select payload: open-port specs plus identified device, or null device."""
+    if device:
+        payload_device = {
+            key: (device.get(key) or "") if isinstance(device, dict) else ""
+            for key in _SELECT_DEVICE_KEYS
+        }
+    else:
+        payload_device = None
     return {
-        "result": "select",
         "port": port,
         "baud": baud,
-        "settings": settings,
         "data_bits": data_bits,
         "stop_bits": stop_bits,
         "parity": parity,
         "flow_control": flow_control,
-        "port_status": port_status,
-        "device_status": device_status,
-        "device": identity,
-        "port_hardware": port_hardware,
-        "device_attributes": device_attributes,
+        "device": payload_device,
     }
 
 
