@@ -1089,7 +1089,16 @@ class SerialPortApp:
             info = child.pack_info()
         except tk.TclError:
             return 0
-        padx = info.get("padx", 0)
+        return self._padx_total(info.get("padx", 0))
+
+    def _grid_padx_total(self, child):
+        try:
+            info = child.grid_info()
+        except tk.TclError:
+            return 0
+        return self._padx_total(info.get("padx", 0))
+
+    def _padx_total(self, padx):
         if isinstance(padx, (tuple, list)):
             if len(padx) >= 2:
                 return self._tk_px(padx[0]) + self._tk_px(padx[-1])
@@ -1097,7 +1106,21 @@ class SerialPortApp:
         parts = str(padx).split()
         if len(parts) >= 2:
             return self._tk_px(parts[0]) + self._tk_px(parts[-1])
-        return 2 * self._tk_px(parts[0] if parts else 0)
+        return 2 * self._tk_px(parts[0] if padx else 0)
+
+    def _grid_row_min_width(self, master, row=0):
+        """Sum of each cell's reqwidth plus its padx (grid minsize must include padx)."""
+        total = 0
+        try:
+            slaves = master.grid_slaves(row=row)
+        except tk.TclError:
+            return 0
+        for child in slaves:
+            try:
+                total += int(child.winfo_reqwidth()) + self._grid_padx_total(child)
+            except (tk.TclError, TypeError, ValueError):
+                continue
+        return total
 
     def _grow_bottom_bar_to_status_fields(self):
         """Keep Port/Device Status columns from shrinking below their font-sized min."""
@@ -1109,9 +1132,22 @@ class SerialPortApp:
             port_wrap = getattr(self, "_port_status_wrap", None)
             device_wrap = getattr(self, "_device_status_wrap", None)
             if port_wrap is not None:
-                bar.columnconfigure(1, minsize=int(port_wrap.winfo_reqwidth()), weight=0)
+                bar.columnconfigure(
+                    1,
+                    minsize=int(port_wrap.winfo_reqwidth())
+                    + self._grid_padx_total(port_wrap),
+                    weight=0,
+                )
             if device_wrap is not None:
-                bar.columnconfigure(3, minsize=int(device_wrap.winfo_reqwidth()), weight=1)
+                bar.columnconfigure(
+                    3,
+                    minsize=int(device_wrap.winfo_reqwidth())
+                    + self._grid_padx_total(device_wrap),
+                    weight=1,
+                )
+            needed = self._grid_row_min_width(bar, 0)
+            if needed:
+                bar.configure(width=needed)
             bar.update_idletasks()
             return int(bar.winfo_reqwidth())
         except (tk.TclError, TypeError, ValueError, AttributeError):
@@ -1133,10 +1169,20 @@ class SerialPortApp:
             return
         try:
             root.update_idletasks()
+            bar = getattr(self, "_bottom_bar", None)
+            bar_w = self._grid_row_min_width(bar, 0) if bar is not None else 0
+            # Orange frame + main pad + bottom inset (aligns with Open/Identify).
+            bottom_inset = 1 + UI_PAD + 1 + UI_PAD
+            chrome = 2 * UI_ORANGE_BORDER + 2 * UI_PAD + 2 * bottom_inset
+            needed = bar_w + chrome if bar_w else 0
             req_w = int(root.winfo_reqwidth())
             req_h = int(root.winfo_reqheight())
             min_w, min_h = root.minsize()
-            root.minsize(max(int(min_w or 0), req_w), max(int(min_h or 0), req_h))
+            width = max(int(min_w or 0), req_w, needed)
+            height = max(int(min_h or 0), req_h)
+            root.minsize(width, height)
+            if int(root.winfo_width() or 0) < width:
+                root.geometry(f"{width}x{max(int(root.winfo_height() or 0), height)}")
         except (tk.TclError, TypeError, ValueError, AttributeError):
             return
 

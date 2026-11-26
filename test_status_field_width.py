@@ -27,6 +27,8 @@ _PROBE = textwrap.dedent(
     root.update_idletasks()
     app._size_status_fields()
     root.update_idletasks()
+    root.deiconify()
+    root.update()
 
     def resolved_font(widget):
         spec = widget.cget("font")
@@ -94,7 +96,6 @@ _PROBE = textwrap.dedent(
 
     before_w = int(root.winfo_width())
     wide = max(before_w + 200, req_w + 200, min_w + 400)
-    root.deiconify()
     root.geometry(f"{wide}x{max(int(root.winfo_height()), 1)}")
     root.update()
     stretched = int(device_wrap.winfo_width())
