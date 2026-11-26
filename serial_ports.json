@@ -8,7 +8,7 @@
       "serial_parameters": {
         "min_baud": 300,
         "max_baud": 3000000,
-        "baud_rates": [9600, 115200, 460800, 921600],
+        "baud_rates": [300, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 38400, 57600, 115200, 230400, 460800, 921600],
         "data_bits": [7, 8],
         "stop_bits": [1, 2],
         "parity": ["None", "Even", "Odd", "Mark", "Space"],
@@ -31,6 +31,7 @@
       "serial_parameters": {
         "min_baud": 75,
         "max_baud": 12000000,
+        "baud_rates": [300, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 38400, 57600, 115200, 230400, 460800, 921600],
         "data_bits": [5, 6, 7, 8],
         "stop_bits": [1, 2],
         "parity": ["None", "Even", "Odd", "Mark", "Space"],
@@ -51,6 +52,7 @@
       "serial_parameters": {
         "min_baud": 300,
         "max_baud": 2000000,
+        "baud_rates": [300, 1200, 2400, 4800, 9600, 14400, 19200, 28800, 38400, 57600, 115200, 230400, 460800, 921600],
         "data_bits": [5, 6, 7, 8],
         "stop_bits": [1, 2],
         "parity": ["None", "Even", "Odd"],

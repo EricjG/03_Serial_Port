@@ -225,31 +225,35 @@ class BaudAndMatchTests(unittest.TestCase):
             list(STANDARD_BAUD_RATES),
         )
 
-    def test_unknown_port_without_a_device_uses_the_standard_baud_list(self):
+    def test_unknown_port_uses_the_standard_baud_list(self):
         self.assertEqual(
             baud_rates_for_picker(device=None, uart_ic=None),
             list(STANDARD_BAUD_RATES),
         )
-        # Chip catalog rates must not replace the slide list when no device is selected.
-        chip = {"serial_parameters": {"baud_rates": [9600, 19200]}}
-        self.assertEqual(
-            baud_rates_for_picker(device=None, uart_ic=chip),
-            list(STANDARD_BAUD_RATES),
-        )
         self.assertNotIn(600, baud_rates_for_picker(None))
-
-    def test_selected_device_rates_win_on_an_unknown_port(self):
         device = {"serial_parameters": {"baud_rates": [460800, 115200]}}
         self.assertEqual(
             baud_rates_for_picker(device=device, uart_ic=None),
-            [460800, 115200],
+            list(STANDARD_BAUD_RATES),
         )
+
+    def test_known_chip_uses_serial_ports_baud_rates(self):
+        chip = {"serial_parameters": {"baud_rates": [9600, 19200]}}
         self.assertEqual(
-            baud_rates_for_picker(
-                device=device,
-                uart_ic={"serial_parameters": {"baud_rates": [9600]}},
-            ),
-            [460800, 115200],
+            baud_rates_for_picker(device=None, uart_ic=chip),
+            [9600, 19200],
+        )
+        device = {"serial_parameters": {"baud_rates": [460800, 115200]}}
+        self.assertEqual(
+            baud_rates_for_picker(device=device, uart_ic=chip),
+            [9600, 19200],
+        )
+
+    def test_missing_chip_baud_rates_filters_standard_to_min_max(self):
+        chip = {"serial_parameters": {"min_baud": 9600, "max_baud": 115200}}
+        self.assertEqual(
+            baud_rates_for_picker(device=None, uart_ic=chip),
+            [rate for rate in STANDARD_BAUD_RATES if 9600 <= rate <= 115200],
         )
 
     def test_vid_pid_match_hex_and_old_decimal(self):
@@ -322,6 +326,20 @@ class SerialPortsFileTests(unittest.TestCase):
             self.assertIn("vid", ic)
             self.assertIn("manufacturer", ic)
             self.assertIn("model", ic)
+            params = ic["serial_parameters"]
+            self.assertIn("min_baud", params)
+            self.assertIn("max_baud", params)
+            expected = [
+                rate
+                for rate in STANDARD_BAUD_RATES
+                if params["min_baud"] <= rate <= params["max_baud"]
+            ]
+            self.assertEqual(params["baud_rates"], expected)
+            self.assertEqual(params["baud_rates"], sorted(params["baud_rates"]))
+            self.assertEqual(
+                baud_rates_for_picker(device=None, uart_ic=ic),
+                expected,
+            )
 
     def test_missing_and_invalid_files(self):
         payload, error = load_serial_ports_file(str(ROOT / "no_such_serial_ports.json"))

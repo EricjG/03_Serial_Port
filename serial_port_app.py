@@ -1012,6 +1012,17 @@ class SerialPortApp:
             bases.append(picker_device_label(item, self.format_baud(baud)) or "device")
         self._device_entries = list(zip(unique_device_labels(bases), devices))
 
+    def _uart_ic_for_selected_port(self):
+        """serial_ports.json chip for the Port dropdown VID/PID, or None."""
+        if getattr(self, "settings_port_var", None) is None:
+            return None
+        port = self._selected_port()
+        if not port:
+            return None
+        row = self._port_row(port) if hasattr(self, "port_data") else None
+        vendor_id = row[2] if row else None
+        return match_uart_ic(self._uart_ic_list(), vendor_id)
+
     def _baud_labels_for_device(self, device, uart_ic=None):
         labels = []
         for baud in baud_rates_for_picker(device, uart_ic=uart_ic):
@@ -1043,14 +1054,27 @@ class SerialPortApp:
         combo = getattr(self, "settings_baud_combo", None)
         if combo is None:
             return
-        if device is None:
-            device = self._device_for_label(self.settings_device_var.get())
-        labels = self._baud_labels_for_device(device)
+        uart_ic = self._uart_ic_for_selected_port()
+        rates = baud_rates_for_picker(device, uart_ic=uart_ic)
+        labels = self._baud_labels_for_device(device, uart_ic=uart_ic)
         combo["values"] = labels
-        if apply_default and labels:
-            default = default_baud(device)
-            shown = self.format_baud(default) if default is not None else None
-            self.settings_baud_var.set(shown or labels[0])
+        if not apply_default:
+            return
+        if device is None and getattr(self, "settings_device_var", None) is not None:
+            device = self._device_for_label(self.settings_device_var.get())
+        if not device:
+            return
+        first = default_baud(device)
+        if first is not None and first in rates:
+            shown = self.format_baud(first)
+            self.settings_baud_var.set(shown or str(first))
+            return
+        if first is not None:
+            name = connected_device_label(device) or "device"
+            self._log(
+                f"Note: {name} first baud {first} is not in the Baud list "
+                "from serial_ports.json; leaving Baud unchanged."
+            )
 
     def _refresh_device_ui(self, *, apply_baud=False):
         self._rebuild_device_entries()
@@ -1265,6 +1289,7 @@ class SerialPortApp:
         self._set_button_enabled(getattr(self, "select_button", None), state["select"])
         self._highlight_tree_port(port)
         self._refresh_identified_device_message()
+        self._refresh_baud_dropdown(apply_default=False)
 
     def _parse_baud(self, text):
         raw = (text or "").strip().upper().replace(" ", "")
@@ -1307,7 +1332,11 @@ class SerialPortApp:
         )
 
     def _apply_selected_device_preferences(self):
-        """Picking a Device changes Device Status only. Baud/Settings/Port Status stay."""
+        """Picking a Device changes Device Status. Baud list stays chip-driven.
+
+        Settings and Port Status stay. Baud preselects the device's first rate
+        when that rate is already in the serial_ports.json / standard list.
+        """
         if self._suppress_device_apply:
             return
         device = self._device_for_label(self.settings_device_var.get())
@@ -1329,7 +1358,7 @@ class SerialPortApp:
         self._selected_device_key = device_identity_key(device)
         self._identify_fail_count = result["fail_count"]
         self._identify_fail_key = result["fail_key"]
-        self._refresh_baud_dropdown(device, apply_default=False)
+        self._refresh_baud_dropdown(device, apply_default=True)
         self._refresh_identified_device_message()
 
     def _release_serial(self):
