@@ -709,7 +709,10 @@ class SerialPortApp:
 
         tree_host = self._outline_box(parent, bg="#FFFFFF")
         tree_host.configure(height=UI_CONTROL_H * UI_TREE_MIN_ROWS)
-        tree_host.grid(row=2, column=0, sticky="nsew")
+        # Host spans the old scrollbar column. Keep the scrollbar inside this
+        # propagate-false box so Windows' ~50px scrollbar reqheight cannot
+        # force a second table row at the window minimum.
+        tree_host.grid(row=2, column=0, columnspan=2, sticky="nsew")
         tree_host.pack_propagate(False)
         self.tree = ttk.Treeview(
             tree_host,
@@ -726,11 +729,10 @@ class SerialPortApp:
                 anchor=anchor,
                 stretch=stretch,
             )
-        self.tree.pack(fill=tk.BOTH, expand=True)
-
-        scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.tree.yview)
+        scroll = ttk.Scrollbar(tree_host, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
-        scroll.grid(row=2, column=1, sticky="ns")
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self._tree_host = tree_host
         self._tree_scrollbar = scroll
 
@@ -792,7 +794,7 @@ class SerialPortApp:
         if host is None:
             return
         try:
-            min_h = self._tree_row_height() * UI_TREE_MIN_ROWS
+            min_h = self._one_row_table_height()
             current = int(host.cget("height") or 0)
             if current < min_h:
                 host.configure(height=min_h)
@@ -813,12 +815,27 @@ class SerialPortApp:
             return
         try:
             row_h = self._tree_row_height()
-            inner = max(row_h, int(host.winfo_height()) - 2)
+            inner = max(
+                row_h, int(host.winfo_height()) - self._tree_host_outline_px()
+            )
             rows = max(UI_TREE_MIN_ROWS, inner // row_h)
             if int(str(tree.cget("height") or 0)) != rows:
                 tree.configure(height=rows)
         except (tk.TclError, TypeError, ValueError):
             pass
+
+    def _tree_host_outline_px(self):
+        host = getattr(self, "_tree_host", None)
+        if host is None:
+            return 2
+        try:
+            return 2 * self._tk_px(host.cget("highlightthickness"))
+        except (tk.TclError, TypeError, ValueError, AttributeError):
+            return 2
+
+    def _one_row_table_height(self):
+        """Viewport height for exactly one Automated table row, plus the outline."""
+        return self._tree_row_height() * UI_TREE_MIN_ROWS + self._tree_host_outline_px()
 
     def _window_min_height(self):
         """Full window height when the Automated table shows exactly one row."""
@@ -828,15 +845,17 @@ class SerialPortApp:
             return UI_CONTROL_H
         try:
             root.update_idletasks()
-            req_h = int(root.winfo_reqheight())
-            row_h = self._tree_row_height()
+            one = self._one_row_table_height()
             if host is None:
-                return req_h
-            host_h = int(host.winfo_reqheight() or host.cget("height") or 0)
-            if host_h <= 0:
-                host_h = UI_TREE_ROWS * row_h
-            extra = max(0, host_h - row_h * UI_TREE_MIN_ROWS)
-            return max(row_h, req_h - extra)
+                return max(one, int(root.winfo_reqheight()))
+            win_h = int(root.winfo_height() or 0)
+            host_h = int(host.winfo_height() or 0)
+            if win_h > 1 and host_h > 0:
+                return max(one, win_h - host_h + one)
+            req_h = int(root.winfo_reqheight())
+            host_req = int(host.winfo_reqheight() or host.cget("height") or 0)
+            extra = max(0, host_req - one)
+            return max(one, req_h - extra)
         except (tk.TclError, TypeError, ValueError):
             return UI_CONTROL_H
 
