@@ -215,10 +215,17 @@ class IdentifiedDeviceDisplayTests(unittest.TestCase):
 
 class OpenButtonAndControlStateTests(unittest.TestCase):
     def test_open_button_labels(self):
-        self.assertEqual(open_button_text("COM4", "available"), "Open: COM4")
-        self.assertEqual(open_button_text("COM4", "held"), "Close: COM4")
-        self.assertEqual(open_button_text("COM5", "in_use"), "In-Use: COM5")
-        self.assertEqual(open_button_text(None, "empty"), "Open:")
+        self.assertEqual(open_button_text("COM4", "available"), "Open")
+        self.assertEqual(open_button_text("COM4", "held"), "Close")
+        self.assertEqual(open_button_text("COM5", "in_use"), "In Use")
+        self.assertEqual(open_button_text(None, "empty"), "Open")
+
+    def test_open_button_text_never_includes_the_port(self):
+        for kind in ("available", "held", "in_use", "empty"):
+            text = open_button_text("/tmp/serialdemo/ttyUSB0", kind)
+            self.assertNotIn("/", text)
+            self.assertNotIn("ttyUSB0", text)
+            self.assertIn(text, ("Open", "Close", "In Use"))
 
     def test_empty_list_disables_connection_controls(self):
         state = picker_control_state(has_ports=False)
@@ -229,7 +236,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertFalse(state["device"])
         self.assertFalse(state["identify"])
         self.assertFalse(state["select"])
-        self.assertEqual(state["open_label"], "Open:")
+        self.assertEqual(state["open_label"], "Open")
         self.assertEqual(state["status"], "None Available")
 
     def test_open_port_locks_settings_and_enables_identify(self):
@@ -243,7 +250,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertFalse(state["baud"])
         self.assertFalse(state["settings"])
         self.assertTrue(state["open"])
-        self.assertEqual(state["open_label"], "Close: COM4")
+        self.assertEqual(state["open_label"], "Close")
         self.assertTrue(state["device"])
         self.assertTrue(state["identify"])
         self.assertTrue(state["select"])
@@ -257,7 +264,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         )
         self.assertTrue(state["port"])
         self.assertFalse(state["open"])
-        self.assertEqual(state["open_label"], "In-Use: COM5")
+        self.assertEqual(state["open_label"], "In Use")
         self.assertFalse(state["identify"])
         self.assertTrue(state["select"])
 
@@ -272,7 +279,7 @@ class OpenButtonAndControlStateTests(unittest.TestCase):
         self.assertTrue(state["baud"])
         self.assertTrue(state["settings"])
         self.assertTrue(state["open"])
-        self.assertEqual(state["open_label"], "Open: COM4")
+        self.assertEqual(state["open_label"], "Open")
         self.assertTrue(state["device"])
         self.assertFalse(state["identify"])
         self.assertTrue(state["select"])
@@ -384,6 +391,47 @@ class SlideOptionListTests(unittest.TestCase):
             ),
             "SIMCom  SIM7080  115.2K Baud",
         )
+
+
+class LayoutTokenTests(unittest.TestCase):
+    def test_iris_grid_and_control_sizes(self):
+        import sys
+        from unittest.mock import MagicMock
+
+        sys.modules.setdefault("tkinter", MagicMock())
+        sys.modules.setdefault("tkinter.ttk", MagicMock())
+        sys.modules.setdefault("tkinter.font", MagicMock())
+        sys.modules.setdefault("serial", MagicMock())
+        sys.modules.setdefault("serial.tools", MagicMock())
+        sys.modules.setdefault("serial.tools.list_ports", MagicMock())
+        from serial_port_app import (
+            LONGEST_PORT_SAMPLE,
+            UI_BTN_W,
+            UI_CONTROL_H,
+            UI_GAP,
+            UI_GROUP_GAP,
+            UI_OUTLINE,
+            UI_PAD,
+            UI_TITLE_H,
+            UI_TREE_CELL_PAD,
+            UI_TREE_COL_WIDTHS,
+            UI_TREE_ROWS,
+        )
+
+        self.assertEqual(UI_PAD, 8)
+        self.assertEqual(UI_GAP, 8)
+        self.assertEqual(UI_GROUP_GAP, 16)
+        self.assertEqual(UI_CONTROL_H, 24)
+        self.assertEqual(UI_BTN_W, 96)
+        self.assertEqual(UI_TITLE_H, 28)
+        self.assertEqual(UI_OUTLINE, "#A0A0A0")
+        self.assertEqual(UI_TREE_ROWS, 6)
+        self.assertEqual(UI_TREE_CELL_PAD, 2)
+        self.assertEqual(
+            UI_TREE_COL_WIDTHS,
+            {"Status": 80, "Port #": 170, "ID/Baud": 110},
+        )
+        self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
 
 
 if __name__ == "__main__":

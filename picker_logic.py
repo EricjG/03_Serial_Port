@@ -174,14 +174,12 @@ def natural_port_sort_key(name):
 
 
 def open_button_text(port, kind):
-    """kind is empty | available | held | in_use."""
+    """kind is empty | available | held | in_use. Label does not include the port."""
     if kind == "held" and port:
-        return f"Close: {port}"
+        return "Close"
     if kind == "in_use" and port:
-        return f"In-Use: {port}"
-    if kind == "available" and port:
-        return f"Open: {port}"
-    return "Open:"
+        return "In Use"
+    return "Open"
 
 
 def port_status_text(has_ports, row_status=None):
