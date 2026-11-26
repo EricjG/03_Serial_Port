@@ -464,6 +464,7 @@ class LayoutTokenTests(unittest.TestCase):
         sys.modules.setdefault("serial.tools.list_ports", MagicMock())
         from serial_port_app import (
             LONGEST_PORT_SAMPLE,
+            PICKER_COMBOBOX_ARROWSIZE,
             PICKER_COMBOBOX_STYLE,
             UI_BTN_W,
             UI_CONTROL_H,
@@ -477,6 +478,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_TREE_COL_WIDTHS,
             UI_TREE_PORT_SAMPLE,
             UI_TREE_ROWS,
+            picker_combobox_layout_element_names,
         )
 
         self.assertEqual(UI_PAD, 8)
@@ -498,6 +500,19 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
         self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
         self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["background"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["bordercolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["lightcolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["darkcolor"], "#FFFFFF")
+        self.assertEqual(PICKER_COMBOBOX_ARROWSIZE, UI_CONTROL_H // 2)
+        self.assertEqual(PICKER_COMBOBOX_STYLE["arrowsize"], PICKER_COMBOBOX_ARROWSIZE)
+        names = picker_combobox_layout_element_names()
+        self.assertNotIn("Combobox.downarrow", names)
+        self.assertNotIn("Combobox.field", names)
+        self.assertNotIn("Combobox.rightdownarrow", names)
+        self.assertIn("Picker.Combobox.downarrow", names)
+        self.assertIn("Picker.Combobox.field", names)
+        self.assertIn("Picker.Combobox.textarea", names)
         self.assertEqual(grid_ceil_px(1, 8), 8)
         self.assertEqual(grid_ceil_px(64, 8), 64)
         self.assertEqual(grid_ceil_px(65, 8), 72)

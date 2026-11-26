@@ -8,7 +8,7 @@ Version: 3.4 — Baud list from serial_ports.json (Nov 26, 2026).
 - White inner boxes: white fill, flat 1px `#A0A0A0` outline
 - Buttons: gray `#C0C0C0`, same 1px `#A0A0A0` outline
 - **One** outer border: orange `#FF8C00`, 3px (padding is white inside it, not extra orange)
-- Control outline (entries, combos, read-only fields): **one** flat 1px `#A0A0A0` line (no sunken / raised, no stacked ttk + wrap borders)
+- Control outline (entries, combos, read-only fields): **one** flat 1px `#A0A0A0` line (no sunken / raised, no stacked ttk + wrap borders). Port / Baud / Device use a cloned flat arrow (clam/default), not the Windows boxed combobox button, so the wrap is the only outline.
 - Disabled text: `#808080` (no hover)
 - Selected list row: yellow `#FFFF00`, dark text
 - Settings preview / Select (dialog new line): green `#90EE90`

@@ -111,8 +111,10 @@ UI_TREE_COL_WIDTHS = {
     "ID/Baud": 110,
 }
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
-# ttk Combobox still paints its own border; force it off so only the wrap's
-# 1px #A0A0A0 outline is visible (same as Settings / status entries).
+# Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
+PICKER_COMBOBOX_ARROWSIZE = UI_CONTROL_H // 2
+# White arrow chrome so clam/default 3-D edges do not draw an inner box.
+# The wrap Frame is the only 1px #A0A0A0 outline (same as Settings / status).
 PICKER_COMBOBOX_STYLE = {
     "relief": "flat",
     "borderwidth": 0,
@@ -120,7 +122,116 @@ PICKER_COMBOBOX_STYLE = {
     "darkcolor": "#FFFFFF",
     "bordercolor": "#FFFFFF",
     "focuscolor": "#FFFFFF",
+    "background": "#FFFFFF",
+    "arrowsize": PICKER_COMBOBOX_ARROWSIZE,
 }
+# Theme-neutral parts (cloned from clam/default). Do not use the current
+# theme's Combobox.downarrow / Combobox.field — on Windows vista those are
+# a boxed drop button and a bordered field, which double the wrap outline.
+PICKER_COMBOBOX_LAYOUT = [
+    (
+        "Picker.Combobox.field",
+        {
+            "sticky": "nswe",
+            "children": [
+                (
+                    "Picker.Combobox.downarrow",
+                    {"side": "right", "sticky": "ns"},
+                ),
+                (
+                    "Picker.Combobox.padding",
+                    {
+                        "sticky": "nswe",
+                        "children": [
+                            ("Picker.Combobox.textarea", {"sticky": "nswe"}),
+                        ],
+                    },
+                ),
+            ],
+        },
+    )
+]
+_PICKER_COMBOBOX_CLONE_THEMES = ("clam", "default")
+_PICKER_COMBOBOX_ELEMENTS = (
+    ("Picker.Combobox.downarrow", "Combobox.downarrow"),
+    ("Picker.Combobox.field", "Combobox.field"),
+    ("Picker.Combobox.padding", "Combobox.padding"),
+    ("Picker.Combobox.textarea", "Combobox.textarea"),
+)
+
+
+def picker_combobox_layout_element_names(layout=None):
+    """Flatten a ttk style.layout() tree to element names (exact, not substrings)."""
+    if layout is None:
+        layout = PICKER_COMBOBOX_LAYOUT
+    names = []
+    for spec in layout:
+        name = spec[0]
+        opts = spec[1] if len(spec) > 1 else {}
+        names.append(name)
+        children = (opts or {}).get("children") or ()
+        names.extend(picker_combobox_layout_element_names(children))
+    return names
+
+
+def _clone_ttk_element(style, dest_name, source_name, themes=_PICKER_COMBOBOX_CLONE_THEMES):
+    """Copy a clam/default element into the current theme under dest_name."""
+    for theme in themes:
+        try:
+            style.element_create(dest_name, "from", theme, source_name)
+            return True
+        except tk.TclError as err:
+            if "duplicate" in str(err).lower():
+                return True
+    return False
+
+
+def configure_picker_combobox_style(style, font=None):
+    """Picker.TCombobox: cloned flat arrow + borderless field; wrap is the outline."""
+    for dest_name, source_name in _PICKER_COMBOBOX_ELEMENTS:
+        _clone_ttk_element(style, dest_name, source_name)
+    kwargs = {
+        "font": font,
+        "fieldbackground": "#FFFFFF",
+        "foreground": UI_FG,
+        "padding": 1,
+        **PICKER_COMBOBOX_STYLE,
+    }
+    if font is None:
+        kwargs.pop("font", None)
+    try:
+        style.configure("Picker.TCombobox", **kwargs)
+    except tk.TclError:
+        try:
+            style.configure("Picker.TCombobox", **PICKER_COMBOBOX_STYLE)
+        except tk.TclError:
+            pass
+    try:
+        style.layout("Picker.TCombobox", PICKER_COMBOBOX_LAYOUT)
+    except tk.TclError:
+        pass
+    style.map(
+        "Picker.TCombobox",
+        foreground=[("disabled", UI_DISABLED)],
+        fieldbackground=[("disabled", "#F0F0F0"), ("readonly", "#FFFFFF")],
+        arrowcolor=[("disabled", UI_DISABLED)],
+    )
+    try:
+        style.map(
+            "Picker.TCombobox",
+            lightcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            darkcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            bordercolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            background=[
+                ("disabled", "#F0F0F0"),
+                ("readonly", "#FFFFFF"),
+                ("!disabled", "#FFFFFF"),
+            ],
+        )
+    except tk.TclError:
+        pass
+
+
 UI_FONT_CANDIDATES = ("Segoe UI", "Noto Sans", "DejaVu Sans", "Arial")
 UI_FONT_SIZE = 9
 
@@ -189,62 +300,12 @@ class SerialPortApp:
             "Treeview.Heading", font=self._font_label, foreground="#000000"
         )
         style.layout("Treeview", [("Treeview.treearea", {"sticky": "nswe"})])
-        style.configure(
-            "Picker.TCombobox",
-            font=self._font_control,
-            fieldbackground="#FFFFFF",
-            background="#FFFFFF",
-            foreground=UI_FG,
-            relief=tk.FLAT,
-            borderwidth=0,
-            padding=1,
-        )
-        try:
-            style.configure("Picker.TCombobox", **PICKER_COMBOBOX_STYLE)
-        except tk.TclError:
-            pass
-        try:
-            # Drop Combobox.field so the wrap's 1px outline is the only border.
-            style.layout(
-                "Picker.TCombobox",
-                [
-                    (
-                        "Combobox.padding",
-                        {
-                            "sticky": "nswe",
-                            "children": [
-                                (
-                                    "Combobox.downarrow",
-                                    {"side": "right", "sticky": "ns"},
-                                ),
-                                ("Combobox.textarea", {"sticky": "nswe"}),
-                            ],
-                        },
-                    )
-                ],
-            )
-        except tk.TclError:
-            pass
+        configure_picker_combobox_style(style, font=self._font_control)
         style.map(
             "Treeview",
             background=[("selected", UI_ROW_SELECTED)],
             foreground=[("selected", "#000000")],
         )
-        style.map(
-            "Picker.TCombobox",
-            foreground=[("disabled", UI_DISABLED)],
-            fieldbackground=[("disabled", "#F0F0F0"), ("readonly", "#FFFFFF")],
-            arrowcolor=[("disabled", UI_DISABLED)],
-        )
-        try:
-            style.map(
-                "Picker.TCombobox",
-                lightcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-                darkcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-                bordercolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
-            )
-        except tk.TclError:
-            pass
 
         self.show_in_use_var = tk.BooleanVar(value=False)
         self.auto_port_scan_var = tk.BooleanVar(value=True)
