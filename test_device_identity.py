@@ -39,8 +39,11 @@ from device_data import (  # noqa: E402
     device_matches_ids,
     format_device_column,
     load_device_file,
+    load_devices_info_file,
+    load_uart_ics_file,
 )
 from device_editor import DeviceEditorApp  # noqa: E402
+from picker_logic import exit_handoff_payload  # noqa: E402
 from serial_port_app import SerialPortApp  # noqa: E402
 
 
@@ -262,6 +265,56 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
             "Unknown",
         )
 
+    def test_available_row_uses_uart_ic_when_vid_pid_matches(self):
+        app = _bare_app()
+        app.uart_ics, error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        self.assertIsNone(error)
+        app.devices_info = {"devices": []}
+        self.assertEqual(
+            app._driver_or_device_column(
+                "Available",
+                None,
+                "USB Serial Port",
+                "0x0403:0x6001",
+            ),
+            "FTDI FT232R/RL/RQ",
+        )
+        self.assertEqual(
+            app._driver_or_device_column(
+                "In Use",
+                None,
+                "USB-to-Serial Comm Port",
+                "0x067B:0x2303",
+            ),
+            "Prolific PL2303HX/TA/SA/RA",
+        )
+        self.assertEqual(
+            app._driver_or_device_column(
+                "Available",
+                None,
+                "Some other adapter",
+                "0x0000:0x0001",
+            ),
+            "Some other adapter",
+        )
+
+    def test_identified_row_prefers_devices_info_short_description(self):
+        app = _bare_app()
+        app.uart_ics = {"uart_ics": []}
+        app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
+        self.assertIsNone(error)
+        mb607 = _device_by_model("MB607")
+        self.assertEqual(
+            app._driver_or_device_column(
+                "Identified",
+                "Revision 1.23 01/15/24",
+                "CP210x USB to UART Bridge Controller",
+                "0x10C4:0xEA60",
+                mb607,
+            ),
+            "MUX Wiring MB607 Body Control Module",
+        )
+
 
 class IdBaudColumnTests(unittest.TestCase):
     def test_identified_shows_short_baud_not_vendor_id(self):
@@ -404,6 +457,113 @@ class BaudDropdownTests(unittest.TestCase):
         app.device_message_var.set.assert_called_with(
             "devices.json is missing — no known devices."
         )
+
+
+class DevicePickAndHandoffTests(unittest.TestCase):
+    def test_picking_a_device_does_not_write_baud_settings_or_port_status(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app._suppress_device_apply = False
+        app._identify_fail_count = 2
+        app._identify_fail_key = ("SIMCom", "SIM7080")
+        app._selected_device_key = ("SIMCom", "SIM7080")
+        app._identified_device_by_port = {}
+        app._devices_load_error = None
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app.device_definitions = {"devices": [mb607]}
+        app.uart_ics = {"uart_ics": []}
+        app.devices_info = {"devices": []}
+        app.port_data = [("Open", "COM3", "0x0403:0x6001", None, "FTDI", None)]
+        app._port_bottom_status_by_port = {"COM3": "Opened"}
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.settings_baud_var = MagicMock()
+        app.settings_parity_var = MagicMock()
+        app.settings_data_var = MagicMock()
+        app.settings_stop_var = MagicMock()
+        app.settings_flow_var = MagicMock()
+        app.port_status_var = MagicMock()
+        app.device_status_var = MagicMock()
+        app.port_message_var = app.port_status_var
+        app.device_message_var = app.device_status_var
+        app._refresh_baud_dropdown = MagicMock()
+        app._mark_port_status_unknown = MagicMock()
+        app._refresh_settings_summary = MagicMock()
+
+        app._apply_selected_device_preferences()
+
+        app.settings_baud_var.set.assert_not_called()
+        app.settings_parity_var.set.assert_not_called()
+        app.settings_data_var.set.assert_not_called()
+        app.settings_stop_var.set.assert_not_called()
+        app.settings_flow_var.set.assert_not_called()
+        app._mark_port_status_unknown.assert_not_called()
+        app._refresh_settings_summary.assert_not_called()
+        app._refresh_baud_dropdown.assert_called()
+        self.assertEqual(app._identify_fail_count, 0)
+        app.device_status_var.set.assert_called_with("Unidentified")
+
+    def test_select_payload_with_and_without_catalog_matches(self):
+        app = _bare_app()
+        mb607 = _device_by_model("MB607")
+        app.uart_ics, uart_error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.devices_info, info_error = load_devices_info_file(str(ROOT / "devices_info.json"))
+        self.assertIsNone(uart_error)
+        self.assertIsNone(info_error)
+        app.device_definitions = {"devices": [mb607]}
+        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._identified_device_by_port = {"COM3": mb607}
+        app._identify_fail_count = 0
+        app._identify_fail_key = ("MUX Wiring", "MB607")
+        app._matched_port_hardware = None
+        app._matched_device_attributes = None
+        app._matched_device_column = "Revision 1.0 01/01/26"
+        app.port_data = [
+            ("Identified", "COM3", "0x0403:0x6001", "Revision 1.0 01/01/26", "FTDI", 115200)
+        ]
+        app._port_bottom_status_by_port = {"COM3": "Opened"}
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM3"
+        app.settings_device_var = MagicMock()
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_baud_var = MagicMock()
+        app.settings_baud_var.get.return_value = "115.2K"
+        app.settings_summary_var = MagicMock()
+        app.settings_summary_var.get.return_value = "8 - 1 - None - None"
+        app.settings_data_var = MagicMock()
+        app.settings_data_var.get.return_value = "8"
+        app.settings_stop_var = MagicMock()
+        app.settings_stop_var.get.return_value = "1"
+        app.settings_parity_var = MagicMock()
+        app.settings_parity_var.get.return_value = "None"
+        app.settings_flow_var = MagicMock()
+        app.settings_flow_var.get.return_value = "None"
+        app.device_status_var = MagicMock()
+        app.device_status_var.get.return_value = "Identified"
+
+        payload = app._select_handoff_payload()
+        self.assertEqual(payload["result"], "select")
+        self.assertEqual(payload["port"], "COM3")
+        self.assertEqual(payload["baud"], 115200)
+        self.assertEqual(payload["settings"], "8 - 1 - None - None")
+        self.assertEqual(payload["data_bits"], 8)
+        self.assertEqual(payload["stop_bits"], 1)
+        self.assertEqual(payload["device"]["model"], "MB607")
+        self.assertEqual(payload["device"]["device_column"], "Revision 1.0 01/01/26")
+        self.assertEqual(payload["port_hardware"]["manufacturer"], "FTDI")
+        self.assertEqual(payload["device_attributes"]["model"], "MB607")
+
+        app.settings_port_var.get.return_value = ""
+        app.port_data = []
+        empty = app._select_handoff_payload()
+        self.assertEqual(empty["result"], "select")
+        self.assertIsNone(empty["port"])
+
+    def test_exit_payload_is_null_result(self):
+        self.assertEqual(exit_handoff_payload(), {"result": None})
+        self.assertEqual(json.dumps(exit_handoff_payload()), '{"result": null}')
 
 
 class DeviceEditorLoadTests(unittest.TestCase):

@@ -36,9 +36,27 @@ You can also run one file: `python -m unittest test_device_identity.py`
 
 GitHub Actions runs the same command on every push and pull request (Ubuntu and Windows, Python 3.12).
 
+## Device data files
+
+Three JSON files sit in this folder (a later change will move them to a shared devices folder):
+
+| File | Role | Lookup |
+|---|---|---|
+| `devices.json` | How to identify a device on a port (commands, regex) | unchanged |
+| `uart_ics.json` | USB-serial **chip** catalog (port hardware) | Port VID/PID. If `pid` is omitted, any PID from that VID matches |
+| `devices_info.json` | What the **device** is and supports (no detection commands) | `manufacturer` + `model` (same strings as `devices.json`) |
+
+`uart_ics.json` currently lists the FTDI FT232R on Eric's COM3 (`0x0403:0x6001`), the Prolific PL2303 on COM8 (`0x067B:0x2303`), and the Silicon Labs CP210x (`0x10C4:0xEA60`) used by the MB607. Matching is by VID/PID only; COM names in `documents.note_short` are notes for people, not keys.
+
+A missing or invalid file shows a message and does not crash. If `devices.json` already has an error on Device Status, later file errors are logged and the app stays usable with a null match.
+
+The picker uses `uart_ics.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
+
+**Select** prints a JSON preview of the current selection to stdout, then quits. **Exit** (and the window X) prints `{"result": null}`. Run from a terminal (`run.bat`) so you can see that JSON.
+
 ## devices.json fields
 
-Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted.
+Each item under `"devices"` describes how to find one piece of equipment. Old files still load: `pause` is treated as seconds, a single `baudrate` becomes a one-item list, and decimal VID/PID values are accepted. Do not strip `type` / `short_description` / `long_description` from this file; identify templates still use them. When filling the Select payload, prefer a `devices_info.json` match and fall back to these fields.
 
 - `manufacturer`, `model` — name. `type` is optional free text (not a fixed list).
 - `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115.2K Baud` (first listed baud). `long_description` is not in that dropdown.

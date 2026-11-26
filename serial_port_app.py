@@ -7,6 +7,7 @@ import tkinter.ttk as ttk
 import tkinter.font as tkfont
 from serial.tools import list_ports  # requires pyserial package: pip install pyserial
 import serial  # requires pyserial package: pip install pyserial
+import json
 import re
 import threading
 import time
@@ -16,11 +17,20 @@ from device_data import (
     command_steps,
     connected_device_label,
     default_baud,
+    device_identity_fields,
     device_matches_ids,
+    devices_info_list,
     format_device_column,
+    identified_connected_label,
     load_device_file,
+    load_devices_info_file,
+    load_uart_ics_file,
+    match_device_info,
+    match_uart_ic,
     migrate_device,
     parse_usb_id,
+    uart_ic_label,
+    uart_ic_list,
 )
 from picker_logic import (
     BAUD_SHORT,
@@ -35,22 +45,29 @@ from picker_logic import (
     PORT_STATUS_UNKNOWN,
     DEVICE_STATUS_UNIDENTIFIED,
     STOP_BITS_CHOICES,
+    apply_device_pick,
     apply_header_button_click,
     check_button_char_width,
+    device_identity_key,
     dropdown_ports,
+    exit_handoff_payload,
     format_baud_label,
     format_settings_text,
     format_vid_pid,
     identified_device_message,
     longest_settings_text,
-    normalize_flow_choice,
     picker_control_state,
     picker_device_label,
+    record_identify_failure,
+    record_identify_success,
+    select_handoff_payload,
     unique_device_labels,
     visible_tree_rows,
 )
 
 DEVICES_JSON = "devices.json"
+UART_ICS_JSON = "uart_ics.json"
+DEVICES_INFO_JSON = "devices_info.json"
 
 APP_VERSION = "3.0"
 AUTO_PORT_SCAN_MS = 1000  # wait before each auto port-scan sequence
@@ -83,12 +100,26 @@ UI_ORANGE_BORDER = 3
 UI_OUTLINE = "#A0A0A0"
 UI_TREE_ROWS = 6
 UI_TREE_CELL_PAD = 2
+UI_TREE_PORT_SAMPLE = "COM99"
+# Port # sized for COM99 plus the 2px cell padding. Saved width goes to
+# Serial Driver / Connected Device (stretch). The Port dropdown still uses
+# LONGEST_PORT_SAMPLE.
 UI_TREE_COL_WIDTHS = {
     "Status": 80,
-    "Port #": 170,
+    "Port #": 64,
     "ID/Baud": 110,
 }
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
+# ttk Combobox still paints its own border; force it off so only the wrap's
+# 1px #A0A0A0 outline is visible (same as Settings / status entries).
+PICKER_COMBOBOX_STYLE = {
+    "relief": "flat",
+    "borderwidth": 0,
+    "lightcolor": "#FFFFFF",
+    "darkcolor": "#FFFFFF",
+    "bordercolor": "#FFFFFF",
+    "focuscolor": "#FFFFFF",
+}
 UI_FONT_CANDIDATES = ("Segoe UI", "Noto Sans", "DejaVu Sans", "Arial")
 UI_FONT_SIZE = 9
 
@@ -125,11 +156,20 @@ class SerialPortApp:
         self._port_bottom_status_by_port = {}
         self._suppress_port_status_event = False
         self._devices_load_error = None
+        self._uart_ics_error = None
+        self._devices_info_error = None
+        self._identify_fail_count = 0
+        self._identify_fail_key = None
+        self._selected_device_key = None
+        self._matched_port_hardware = None
+        self._matched_device_attributes = None
+        self._matched_device_column = ""
 
-        self.device_definitions, self._devices_load_error = load_device_file(
-            DEVICES_JSON
-        )
+        self._load_data_files()
         self._rebuild_device_entries()
+        self._selected_device_key = device_identity_key(
+            self._device_entries[0][1] if self._device_entries else None
+        )
 
         self._init_fonts()
         style = ttk.Style()
@@ -158,6 +198,32 @@ class SerialPortApp:
             borderwidth=0,
             padding=1,
         )
+        try:
+            style.configure("Picker.TCombobox", **PICKER_COMBOBOX_STYLE)
+        except tk.TclError:
+            pass
+        try:
+            # Drop Combobox.field so the wrap's 1px outline is the only border.
+            style.layout(
+                "Picker.TCombobox",
+                [
+                    (
+                        "Combobox.padding",
+                        {
+                            "sticky": "nswe",
+                            "children": [
+                                (
+                                    "Combobox.downarrow",
+                                    {"side": "right", "sticky": "ns"},
+                                ),
+                                ("Combobox.textarea", {"sticky": "nswe"}),
+                            ],
+                        },
+                    )
+                ],
+            )
+        except tk.TclError:
+            pass
         style.map(
             "Treeview",
             background=[("selected", UI_ROW_SELECTED)],
@@ -169,6 +235,15 @@ class SerialPortApp:
             fieldbackground=[("disabled", "#F0F0F0"), ("readonly", "#FFFFFF")],
             arrowcolor=[("disabled", UI_DISABLED)],
         )
+        try:
+            style.map(
+                "Picker.TCombobox",
+                lightcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+                darkcolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+                bordercolor=[("focus", "#FFFFFF"), ("!focus", "#FFFFFF")],
+            )
+        except tk.TclError:
+            pass
 
         self.show_in_use_var = tk.BooleanVar(value=False)
         self.auto_port_scan_var = tk.BooleanVar(value=True)
@@ -403,7 +478,14 @@ class SerialPortApp:
         self._tree_cols = [c[0] for c in cols]
 
         self._tree_header = tk.Frame(parent, bg=UI_HEADER)
-        self._tree_header.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, UI_TREE_CELL_PAD))
+        self._tree_header.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(0, UI_TREE_CELL_PAD),
+            padx=(1, 0),
+        )
         self._tree_header_labels = []
         for i, (name, anchor, _width) in enumerate(cols):
             lbl = tk.Label(
@@ -425,9 +507,8 @@ class SerialPortApp:
         self._tree_header_scroll_pad = tk.Frame(self._tree_header, bg=UI_HEADER, width=18)
         self._tree_header_scroll_pad.grid(row=0, column=len(cols), sticky="ns")
 
-        tree_host = tk.Frame(
-            parent, bg="#FFFFFF", height=UI_TREE_ROWS * UI_CONTROL_H
-        )
+        tree_host = self._outline_box(parent, bg="#FFFFFF")
+        tree_host.configure(height=UI_TREE_ROWS * UI_CONTROL_H)
         tree_host.grid(row=2, column=0, sticky="ew")
         tree_host.pack_propagate(False)
         self.tree = ttk.Treeview(
@@ -471,7 +552,7 @@ class SerialPortApp:
         return font.measure(str(text))
 
     def _apply_tree_column_widths(self):
-        """Fixed Iris widths: Status 80, Port 170, ID/Baud 110; driver fills the rest."""
+        """Fixed Iris widths: Status 80, Port # for COM99, ID/Baud 110; driver fills the rest."""
         if not getattr(self, "tree", None):
             return
         try:
@@ -973,7 +1054,12 @@ class SerialPortApp:
         if getattr(self, "settings_device_var", None) is not None:
             selected = self._device_for_label(self.settings_device_var.get())
         self._set_message_lines(
-            device_text=identified_device_message(identified, selected)
+            device_text=identified_device_message(
+                identified,
+                selected,
+                fail_count=getattr(self, "_identify_fail_count", 0),
+                fail_key=getattr(self, "_identify_fail_key", None),
+            )
         )
 
     def _sync_port_selection_ui(self):
@@ -1052,32 +1138,29 @@ class SerialPortApp:
         )
 
     def _apply_selected_device_preferences(self):
+        """Picking a Device changes Device Status only. Baud/Settings/Port Status stay."""
         if self._suppress_device_apply:
             return
         device = self._device_for_label(self.settings_device_var.get())
-        if not device:
-            self._refresh_baud_dropdown(None, apply_default=False)
-            self._mark_port_status_unknown()
-            self._refresh_identified_device_message()
-            return
-        if self._held_port:
-            self._refresh_baud_dropdown(device, apply_default=False)
-            self._mark_port_status_unknown()
-            self._refresh_identified_device_message()
-            return
-        params = device.get("serial_parameters") or {}
-        self._refresh_baud_dropdown(device, apply_default=True)
-        parity = PARITY_TO_UI.get(str(params.get("parity", "N")).upper(), "None")
-        self.settings_parity_var.set(parity)
-        self.settings_data_var.set(str(int(float(params.get("bytesize", 8)))))
-        stop = params.get("stopbits", 1)
-        stop_text = str(int(stop)) if float(stop) == int(float(stop)) else str(stop)
-        if stop_text not in STOP_BITS_CHOICES:
-            stop_text = "1"
-        self.settings_stop_var.set(stop_text)
-        self.settings_flow_var.set(normalize_flow_choice(params.get("flow_control")))
-        self._refresh_settings_summary()
-        self._mark_port_status_unknown()
+        port = None
+        if getattr(self, "settings_port_var", None) is not None:
+            port = self._selected_port()
+        identified_map = getattr(self, "_identified_device_by_port", None) or {}
+        identified = identified_map.get(port) if port else None
+        result = apply_device_pick(
+            getattr(self, "_selected_device_key", None),
+            device,
+            baud=None,
+            settings=None,
+            port_status=None,
+            identified_device=identified,
+            fail_count=getattr(self, "_identify_fail_count", 0),
+            fail_key=getattr(self, "_identify_fail_key", None),
+        )
+        self._selected_device_key = device_identity_key(device)
+        self._identify_fail_count = result["fail_count"]
+        self._identify_fail_key = result["fail_key"]
+        self._refresh_baud_dropdown(device, apply_default=False)
         self._refresh_identified_device_message()
 
     def _release_serial(self):
@@ -1160,6 +1243,10 @@ class SerialPortApp:
             self._refresh_baud_dropdown(device, apply_default=False)
             device = device or self._device_for_label(unique) or self._device_for_label(found)
             self._set_identified_device(port, device)
+            success = record_identify_success(device)
+            self._identify_fail_count = success["fail_count"]
+            self._identify_fail_key = success["fail_key"]
+            self._hold_select_matches(port, device, found)
             self._set_port_row(
                 port,
                 status="Identified",
@@ -1168,6 +1255,13 @@ class SerialPortApp:
             )
             self._refresh_identified_device_message()
         else:
+            failure = record_identify_failure(
+                device,
+                getattr(self, "_identify_fail_count", 0),
+                getattr(self, "_identify_fail_key", None),
+            )
+            self._identify_fail_count = failure["fail_count"]
+            self._identify_fail_key = failure["fail_key"]
             self._set_identified_device(port, None)
             self._refresh_identified_device_message()
         self._finish_device_scan()
@@ -1176,12 +1270,105 @@ class SerialPortApp:
         elif was_open and found:
             self._sync_port_selection_ui()
 
+    def _print_handoff_json(self, payload):
+        print(json.dumps(payload, indent=2), flush=True)
+
     def _on_select_port(self):
-        port = self._selected_port()
+        payload = self._select_handoff_payload()
+        port = payload.get("port")
+        if port:
+            self._log(f"Selected port: {port}")
+        self._print_handoff_json(payload)
         if not port:
             return
-        self._log(f"Selected port: {port}")
-        self._on_exit()
+        self._shutdown()
+
+    def _select_handoff_payload(self):
+        port = self._selected_port() if hasattr(self, "_selected_port") else None
+        baud = None
+        settings = None
+        data_bits = None
+        stop_bits = None
+        parity = None
+        flow_control = None
+        port_status = None
+        device_status = None
+        try:
+            if getattr(self, "settings_baud_var", None) is not None:
+                baud = self._parse_baud(self.settings_baud_var.get())
+        except (TypeError, ValueError):
+            baud = None
+        if getattr(self, "settings_summary_var", None) is not None:
+            settings = self.settings_summary_var.get() or None
+        elif hasattr(self, "_format_settings_summary"):
+            settings = self._format_settings_summary()
+        try:
+            if getattr(self, "settings_data_var", None) is not None:
+                data_bits = int(float(self.settings_data_var.get() or 8))
+        except (TypeError, ValueError):
+            data_bits = None
+        try:
+            if getattr(self, "settings_stop_var", None) is not None:
+                stop_text = (self.settings_stop_var.get() or "1").strip()
+                stop_bits = float(stop_text)
+                if stop_bits == int(stop_bits):
+                    stop_bits = int(stop_bits)
+        except (TypeError, ValueError):
+            stop_bits = None
+        if getattr(self, "settings_parity_var", None) is not None:
+            parity = self.settings_parity_var.get() or None
+        if getattr(self, "settings_flow_var", None) is not None:
+            flow_control = self.settings_flow_var.get() or None
+        if port:
+            port_status = (getattr(self, "_port_bottom_status_by_port", None) or {}).get(
+                port
+            )
+            if port_status is None and getattr(self, "port_status_var", None) is not None:
+                port_status = self.port_status_var.get()
+        elif getattr(self, "port_status_var", None) is not None:
+            port_status = self.port_status_var.get()
+        selected = None
+        if getattr(self, "settings_device_var", None) is not None:
+            selected = self._device_for_label(self.settings_device_var.get())
+        identified = None
+        if port:
+            identified = (getattr(self, "_identified_device_by_port", None) or {}).get(
+                port
+            )
+        device_status = identified_device_message(
+            identified,
+            selected,
+            fail_count=getattr(self, "_identify_fail_count", 0),
+            fail_key=getattr(self, "_identify_fail_key", None),
+        )
+        if getattr(self, "device_status_var", None) is not None:
+            shown = self.device_status_var.get()
+            if shown:
+                device_status = shown
+        info = self._device_attributes_for(selected or identified)
+        hardware = self._port_hardware_for(port)
+        device_column = ""
+        if port:
+            row = self._port_row(port) if hasattr(self, "_port_row") else None
+            if row and row[0] == "Identified" and row[3]:
+                device_column = row[3]
+        if not device_column:
+            device_column = getattr(self, "_matched_device_column", "") or ""
+        identity = device_identity_fields(info, selected or identified, device_column)
+        return select_handoff_payload(
+            port=port,
+            baud=baud,
+            settings=settings,
+            data_bits=data_bits,
+            stop_bits=stop_bits,
+            parity=parity,
+            flow_control=flow_control,
+            port_status=port_status,
+            device_status=device_status,
+            device=identity,
+            port_hardware=hardware,
+            device_attributes=info,
+        )
 
     def _on_connection_scan_device(self):
         port = self._selected_port()
@@ -1432,6 +1619,10 @@ class SerialPortApp:
         status_group("Device Status:", self.device_status_var, 14)
 
     def _on_exit(self):
+        self._print_handoff_json(exit_handoff_payload())
+        self._shutdown()
+
+    def _shutdown(self):
         self._clear_auto_scans()
         self._release_serial()
         self.root.destroy()
@@ -1447,10 +1638,76 @@ class SerialPortApp:
             return self.format_baud(baud)
         return vendor_id if vendor_id else "Unknown"
 
-    def _driver_or_device_column(self, status, device_name, description):
-        if status == "Identified" and device_name:
-            return device_name
+    def _driver_or_device_column(
+        self, status, device_name, description, vendor_id=None, identified_device=None
+    ):
+        if status == "Identified":
+            info = self._device_attributes_for(identified_device)
+            label = identified_connected_label(info, identified_device, device_name)
+            if label:
+                return label
+            if device_name:
+                return device_name
+        chip = uart_ic_label(match_uart_ic(self._uart_ic_list(), vendor_id))
+        if chip:
+            return chip
         return description or "Unknown"
+
+    def _uart_ic_list(self):
+        return uart_ic_list(getattr(self, "uart_ics", None))
+
+    def _devices_info_list(self):
+        return devices_info_list(getattr(self, "devices_info", None))
+
+    def _device_attributes_for(self, device):
+        if not device:
+            return None
+        return match_device_info(
+            self._devices_info_list(),
+            device.get("manufacturer"),
+            device.get("model"),
+        )
+
+    def _port_hardware_for(self, port):
+        if not port:
+            return None
+        row = self._port_row(port) if hasattr(self, "_port_row") else None
+        vendor_id = row[2] if row else None
+        matched = match_uart_ic(self._uart_ic_list(), vendor_id)
+        if matched is not None:
+            return matched
+        return getattr(self, "_matched_port_hardware", None)
+
+    def _hold_select_matches(self, port, device, device_column=""):
+        self._matched_device_column = device_column or ""
+        self._matched_device_attributes = self._device_attributes_for(device)
+        self._matched_port_hardware = self._port_hardware_for(port)
+
+    def _note_scan_identified(self, found_def, name, port):
+        """Scan Devices confirmation of the dropdown device clears Identify failures."""
+        selected = None
+        if getattr(self, "settings_device_var", None) is not None:
+            selected = self._device_for_label(self.settings_device_var.get())
+        if device_identity_key(found_def) != device_identity_key(selected):
+            return
+        success = record_identify_success(found_def)
+        self._identify_fail_count = success["fail_count"]
+        self._identify_fail_key = success["fail_key"]
+        self._hold_select_matches(port, found_def, name)
+
+    def _load_data_files(self, *, log_errors=True):
+        self.device_definitions, self._devices_load_error = load_device_file(
+            DEVICES_JSON
+        )
+        self.uart_ics, self._uart_ics_error = load_uart_ics_file(UART_ICS_JSON)
+        self.devices_info, self._devices_info_error = load_devices_info_file(
+            DEVICES_INFO_JSON
+        )
+        if log_errors:
+            if self._uart_ics_error:
+                self._log(self._uart_ics_error)
+            if self._devices_info_error:
+                self._log(self._devices_info_error)
 
     @staticmethod
     def _connected_device_label(device):
@@ -1683,9 +1940,16 @@ class SerialPortApp:
         extra = (selected, self._held_port)
         self.tree.delete(*self.tree.get_children())
         rows = visible_tree_rows(self.port_data, self._include_in_use_ports(), extra=extra)
+        identified_map = getattr(self, "_identified_device_by_port", None) or {}
         for status, port, vendor_id, device_name, description, baud in rows:
             id_baud = self._id_baud_column(status, vendor_id, baud)
-            connected = self._driver_or_device_column(status, device_name, description)
+            connected = self._driver_or_device_column(
+                status,
+                device_name,
+                description,
+                vendor_id,
+                identified_map.get(port),
+            )
             tags = ("identified",) if status == "Identified" else ()
             self.tree.insert(
                 "",
@@ -1807,6 +2071,7 @@ class SerialPortApp:
                 else:
                     name, found_baud, found_def = result
                     self._set_identified_device(port, found_def)
+                    self._note_scan_identified(found_def, name, port)
                     new_data.append(
                         (
                             "Identified",
@@ -1844,6 +2109,8 @@ class SerialPortApp:
         self._log("Device scan...")
         try:
             device_definitions, load_error = load_device_file(DEVICES_JSON)
+            uart_ics, uart_error = load_uart_ics_file(UART_ICS_JSON)
+            devices_info, info_error = load_devices_info_file(DEVICES_INFO_JSON)
 
             comports, by_device = self._comports_by_device()
             known_ports = set(by_device)
@@ -1919,6 +2186,10 @@ class SerialPortApp:
                     port_data,
                     load_error,
                     identified_map,
+                    uart_ics,
+                    uart_error,
+                    devices_info,
+                    info_error,
                 ),
             )
         except Exception as e:
@@ -1932,10 +2203,31 @@ class SerialPortApp:
         port_data,
         load_error=None,
         identified_map=None,
+        uart_ics=None,
+        uart_error=None,
+        devices_info=None,
+        info_error=None,
     ):
         self.device_definitions = device_definitions
         self._devices_load_error = load_error
+        if uart_ics is not None:
+            self.uart_ics = uart_ics
+            self._uart_ics_error = uart_error
+            if uart_error:
+                self._log(uart_error)
+        if devices_info is not None:
+            self.devices_info = devices_info
+            self._devices_info_error = info_error
+            if info_error:
+                self._log(info_error)
         self._identified_device_by_port = dict(identified_map or {})
+        for port, found_def in self._identified_device_by_port.items():
+            name = ""
+            for entry in port_data:
+                if entry[1] == port:
+                    name = entry[3] or ""
+                    break
+            self._note_scan_identified(found_def, name, port)
         self._refresh_device_ui(apply_baud=not self._held_port)
         self.known_ports = known_ports
         self.port_data = port_data

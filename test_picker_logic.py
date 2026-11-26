@@ -14,16 +14,20 @@ from picker_logic import (
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
     UNKNOWN_DEVICE_MESSAGE,
+    apply_device_pick,
     apply_header_button_click,
     check_button_char_width,
     device_identity_key,
     device_message_text,
     device_status_text,
     dropdown_ports,
+    english_ordinal,
+    exit_handoff_payload,
     format_baud_label,
     format_settings_text,
     format_vid_pid,
     identified_device_message,
+    identify_failure_label,
     longest_settings_text,
     natural_port_sort_key,
     normalize_flow_choice,
@@ -32,6 +36,9 @@ from picker_logic import (
     picker_device_label,
     port_event_message,
     port_status_text,
+    record_identify_failure,
+    record_identify_success,
+    select_handoff_payload,
     unique_device_labels,
     unique_labeled_items,
     visible_tree_rows,
@@ -406,6 +413,7 @@ class LayoutTokenTests(unittest.TestCase):
         sys.modules.setdefault("serial.tools.list_ports", MagicMock())
         from serial_port_app import (
             LONGEST_PORT_SAMPLE,
+            PICKER_COMBOBOX_STYLE,
             UI_BTN_W,
             UI_CONTROL_H,
             UI_GAP,
@@ -416,6 +424,7 @@ class LayoutTokenTests(unittest.TestCase):
             UI_TITLE_H,
             UI_TREE_CELL_PAD,
             UI_TREE_COL_WIDTHS,
+            UI_TREE_PORT_SAMPLE,
             UI_TREE_ROWS,
         )
 
@@ -431,9 +440,175 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(UI_TREE_CELL_PAD, 2)
         self.assertEqual(
             UI_TREE_COL_WIDTHS,
-            {"Status": 80, "Port #": 170, "ID/Baud": 110},
+            {"Status": 80, "Port #": 64, "ID/Baud": 110},
         )
+        self.assertLess(UI_TREE_COL_WIDTHS["Port #"], 170)
         self.assertEqual(LONGEST_PORT_SAMPLE, "/tmp/serialdemo/ttyUSB0")
+        self.assertEqual(UI_TREE_PORT_SAMPLE, "COM99")
+        self.assertEqual(PICKER_COMBOBOX_STYLE["borderwidth"], 0)
+        self.assertEqual(PICKER_COMBOBOX_STYLE["relief"], "flat")
+
+
+class IdentifyFailureOrdinalTests(unittest.TestCase):
+    def test_failed_then_english_ordinals(self):
+        self.assertEqual(identify_failure_label(1), "Failed")
+        self.assertEqual(identify_failure_label(2), "2nd Failure")
+        self.assertEqual(identify_failure_label(3), "3rd Failure")
+        self.assertEqual(identify_failure_label(4), "4th Failure")
+        self.assertEqual(identify_failure_label(11), "11th Failure")
+        self.assertEqual(identify_failure_label(21), "21st Failure")
+        self.assertEqual(identify_failure_label(22), "22nd Failure")
+        self.assertEqual(identify_failure_label(23), "23rd Failure")
+
+    def test_ordinal_helper_teen_and_twenty_cases(self):
+        self.assertEqual(english_ordinal(1), "1st")
+        self.assertEqual(english_ordinal(2), "2nd")
+        self.assertEqual(english_ordinal(3), "3rd")
+        self.assertEqual(english_ordinal(4), "4th")
+        self.assertEqual(english_ordinal(11), "11th")
+        self.assertEqual(english_ordinal(12), "12th")
+        self.assertEqual(english_ordinal(13), "13th")
+        self.assertEqual(english_ordinal(21), "21st")
+        self.assertEqual(english_ordinal(22), "22nd")
+        self.assertEqual(english_ordinal(23), "23rd")
+        self.assertEqual(english_ordinal(24), "24th")
+
+    def test_identify_success_clears_the_count(self):
+        mb607 = {"manufacturer": "MUX Wiring", "model": "MB607"}
+        result = record_identify_success(mb607)
+        self.assertEqual(result["device_status"], DEVICE_STATUS_IDENTIFIED)
+        self.assertEqual(result["fail_count"], 0)
+        self.assertEqual(result["fail_key"], ("MUX Wiring", "MB607"))
+
+    def test_identify_failures_accumulate_for_the_same_device(self):
+        mb607 = {"manufacturer": "MUX Wiring", "model": "MB607"}
+        first = record_identify_failure(mb607, 0, None)
+        self.assertEqual(first["device_status"], "Failed")
+        self.assertEqual(first["fail_count"], 1)
+        second = record_identify_failure(mb607, first["fail_count"], first["fail_key"])
+        self.assertEqual(second["device_status"], "2nd Failure")
+        third = record_identify_failure(mb607, second["fail_count"], second["fail_key"])
+        self.assertEqual(third["device_status"], "3rd Failure")
+        self.assertTrue(third["port_status_unchanged"])
+
+    def test_device_status_shows_failure_until_identified(self):
+        mb607 = {"manufacturer": "MUX Wiring", "model": "MB607"}
+        self.assertEqual(
+            device_status_text(None, mb607, fail_count=2, fail_key=("MUX Wiring", "MB607")),
+            "2nd Failure",
+        )
+        self.assertEqual(
+            device_status_text(mb607, mb607, fail_count=2, fail_key=("MUX Wiring", "MB607")),
+            DEVICE_STATUS_IDENTIFIED,
+        )
+
+
+class DevicePickSideEffectTests(unittest.TestCase):
+    mb607 = {
+        "manufacturer": "MUX Wiring",
+        "model": "MB607",
+        "serial_parameters": {"baud_rates": [460800, 115200]},
+    }
+    sim = {"manufacturer": "SIMCom", "model": "SIM7080"}
+
+    def test_pick_does_not_change_baud_settings_or_port_status(self):
+        result = apply_device_pick(
+            ("SIMCom", "SIM7080"),
+            self.mb607,
+            baud="115.2K",
+            settings="8 - 1 - None - None",
+            port_status="Opened",
+            identified_device=None,
+            fail_count=3,
+            fail_key=("SIMCom", "SIM7080"),
+        )
+        self.assertEqual(result["baud"], "115.2K")
+        self.assertEqual(result["settings"], "8 - 1 - None - None")
+        self.assertEqual(result["port_status"], "Opened")
+        self.assertEqual(result["device_status"], DEVICE_STATUS_UNIDENTIFIED)
+        self.assertEqual(result["fail_count"], 0)
+        self.assertEqual(result["fail_key"], ("MUX Wiring", "MB607"))
+        self.assertTrue(result["refresh_baud_list"])
+        self.assertFalse(result["apply_baud"])
+        self.assertFalse(result["apply_settings"])
+        self.assertFalse(result["mark_port_unknown"])
+
+    def test_same_device_pick_keeps_failure_count(self):
+        result = apply_device_pick(
+            ("MUX Wiring", "MB607"),
+            self.mb607,
+            baud="9600",
+            settings="8 - 1 - None - None",
+            port_status="Opened",
+            fail_count=2,
+            fail_key=("MUX Wiring", "MB607"),
+        )
+        self.assertEqual(result["fail_count"], 2)
+        self.assertEqual(result["device_status"], "2nd Failure")
+        self.assertEqual(result["port_status"], "Opened")
+
+
+class HandoffPayloadTests(unittest.TestCase):
+    def test_exit_is_null_result(self):
+        self.assertEqual(exit_handoff_payload(), {"result": None})
+        self.assertEqual(
+            __import__("json").dumps(exit_handoff_payload(), indent=2),
+            '{\n  "result": null\n}',
+        )
+
+    def test_select_shape_prefers_null_over_dropping_keys(self):
+        payload = select_handoff_payload()
+        self.assertEqual(payload["result"], "select")
+        for key in (
+            "port",
+            "baud",
+            "settings",
+            "data_bits",
+            "stop_bits",
+            "parity",
+            "flow_control",
+            "port_status",
+            "device_status",
+            "device",
+            "port_hardware",
+            "device_attributes",
+        ):
+            self.assertIn(key, payload)
+        self.assertIsNone(payload["port"])
+        self.assertIsNone(payload["port_hardware"])
+        self.assertIsNone(payload["device_attributes"])
+        self.assertEqual(payload["device"]["manufacturer"], "")
+        self.assertEqual(payload["device"]["device_column"], "")
+
+    def test_select_includes_hardware_and_attributes_when_matched(self):
+        payload = select_handoff_payload(
+            port="COM3",
+            baud=115200,
+            settings="8 - 1 - None - None",
+            data_bits=8,
+            stop_bits=1,
+            parity="None",
+            flow_control="None",
+            port_status="Opened",
+            device_status="Identified",
+            device={
+                "manufacturer": "MUX Wiring",
+                "model": "MB607",
+                "type": "Body Control Module",
+                "short_description": "Body Control Module",
+                "long_description": "BCM with 7-Inputs 6-Outputs & CAN bus",
+                "device_column": "Revision 1.0 01/01/26",
+            },
+            port_hardware={"manufacturer": "FTDI", "model": "FT232R/RL/RQ", "vid": "0x0403"},
+            device_attributes={"manufacturer": "MUX Wiring", "model": "MB607"},
+        )
+        self.assertEqual(payload["result"], "select")
+        self.assertEqual(payload["port"], "COM3")
+        self.assertEqual(payload["baud"], 115200)
+        self.assertEqual(payload["flow_control"], "None")
+        self.assertEqual(payload["device"]["model"], "MB607")
+        self.assertEqual(payload["port_hardware"]["vid"], "0x0403")
+        self.assertEqual(payload["device_attributes"]["model"], "MB607")
 
 
 if __name__ == "__main__":

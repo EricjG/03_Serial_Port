@@ -220,17 +220,165 @@ def device_message_text(device):
     return f"Device: {name}" if name else "Device:"
 
 
-def device_status_text(identified_device, selected_device):
+def english_ordinal(n):
+    """1 -> 1st, 2 -> 2nd, 3 -> 3rd, 11 -> 11th, 21 -> 21st, ..."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    abs_n = abs(n)
+    if 10 <= (abs_n % 100) <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(abs_n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def identify_failure_label(fail_count):
+    """Identify-button Device Status: Failed, then 2nd Failure, 3rd Failure, ..."""
+    try:
+        count = int(fail_count)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return DEVICE_STATUS_UNIDENTIFIED
+    if count == 1:
+        return "Failed"
+    return f"{english_ordinal(count)} Failure"
+
+
+def device_status_text(
+    identified_device, selected_device, fail_count=0, fail_key=None
+):
     """Bottom Device Status. Unidentified until Identify or Scan Devices confirms."""
     identified_key = device_identity_key(identified_device)
-    if identified_key and identified_key == device_identity_key(selected_device):
+    selected_key = device_identity_key(selected_device)
+    if identified_key and identified_key == selected_key:
         return DEVICE_STATUS_IDENTIFIED
+    if fail_count and fail_key and fail_key == selected_key:
+        return identify_failure_label(fail_count)
     return DEVICE_STATUS_UNIDENTIFIED
 
 
-def identified_device_message(identified_device, selected_device):
+def identified_device_message(
+    identified_device, selected_device, fail_count=0, fail_key=None
+):
     """Bottom Device Status value. Unidentified until this port matches the dropdown device."""
-    return device_status_text(identified_device, selected_device)
+    return device_status_text(
+        identified_device, selected_device, fail_count, fail_key
+    )
+
+
+def apply_device_pick(
+    previous_key,
+    selected_device,
+    *,
+    baud,
+    settings,
+    port_status,
+    identified_device=None,
+    fail_count=0,
+    fail_key=None,
+):
+    """State after picking a Device. Baud, settings, and Port Status stay put."""
+    new_key = device_identity_key(selected_device)
+    if new_key != previous_key:
+        fail_count = 0
+        fail_key = new_key
+    return {
+        "baud": baud,
+        "settings": settings,
+        "port_status": port_status,
+        "device_status": device_status_text(
+            identified_device, selected_device, fail_count, fail_key
+        ),
+        "fail_count": fail_count,
+        "fail_key": fail_key,
+        "refresh_baud_list": True,
+        "apply_baud": False,
+        "apply_settings": False,
+        "mark_port_unknown": False,
+    }
+
+
+def record_identify_success(device):
+    """Identify/Scan confirmation: Identified, failure count cleared."""
+    return {
+        "fail_count": 0,
+        "fail_key": device_identity_key(device),
+        "device_status": DEVICE_STATUS_IDENTIFIED,
+    }
+
+
+def record_identify_failure(device, fail_count=0, fail_key=None):
+    """Identify miss for the dropdown device. Scan Devices misses do not use this."""
+    key = device_identity_key(device)
+    try:
+        count = int(fail_count)
+    except (TypeError, ValueError):
+        count = 0
+    if key != fail_key:
+        count = 1
+    else:
+        count = count + 1
+    return {
+        "fail_count": count,
+        "fail_key": key,
+        "device_status": identify_failure_label(count),
+        "port_status_unchanged": True,
+    }
+
+
+def blank_device_identity():
+    return {
+        "manufacturer": "",
+        "model": "",
+        "type": "",
+        "short_description": "",
+        "long_description": "",
+        "device_column": "",
+    }
+
+
+def exit_handoff_payload():
+    """Window X / Exit: empty result for the calling app."""
+    return {"result": None}
+
+
+def select_handoff_payload(
+    *,
+    port=None,
+    baud=None,
+    settings=None,
+    data_bits=None,
+    stop_bits=None,
+    parity=None,
+    flow_control=None,
+    port_status=None,
+    device_status=None,
+    device=None,
+    port_hardware=None,
+    device_attributes=None,
+):
+    """Select preview payload. Prefer null over dropping a key."""
+    identity = blank_device_identity()
+    if isinstance(device, dict):
+        identity.update(device)
+    return {
+        "result": "select",
+        "port": port,
+        "baud": baud,
+        "settings": settings,
+        "data_bits": data_bits,
+        "stop_bits": stop_bits,
+        "parity": parity,
+        "flow_control": flow_control,
+        "port_status": port_status,
+        "device_status": device_status,
+        "device": identity,
+        "port_hardware": port_hardware,
+        "device_attributes": device_attributes,
+    }
 
 
 def apply_header_button_click(in_use, scan_ports, scan_devices):
