@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.3 — Device pick, Identify failures, single outlines, uart_ics / devices_info (Nov 26, 2026).
+Version: 3.3 — Device pick, Identify failures, single outlines, serial_ports / devices_info (Nov 26, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -45,7 +45,7 @@ Version: 3.3 — Device pick, Identify failures, single outlines, uart_ics / dev
 - Double-click a row is the same as **Select**
 - In Use rows appear in the list and Port dropdown only when In Use is on (or after a one-shot In Use click)
 - List Status column values stay **Available** / **In Use** / **Open** / **Identified** (not the bottom Port Status words)
-- Serial Driver / Connected Device: Available / In Use / Open rows show the matched `uart_ics.json` chip (`manufacturer` + `model`), or the OS description if none matches. Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the identify `device_column` text
+- Serial Driver / Connected Device: Available / In Use / Open rows show the matched `serial_ports.json` chip (`manufacturer` + `model`), or the OS description if none matches. Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the identify `device_column` text
 
 ## Manually (port / device box)
 - Titled light-blue box under Automated
@@ -93,14 +93,14 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (Port Settings / Baud changed). Picking a Device does **not** set Port Status to Unknown
 - Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
 - Identify button failures (same device, try-again): **Failed**, then **2nd Failure**, **3rd Failure**, **4th Failure**, … (normal English ordinals: 11th, 21st, 22nd, 23rd). A successful Scan Devices confirmation of the selected device sets **Identified** and clears the count. A Scan Devices miss does not increment this count
-- If `devices.json` is missing or invalid, Device Status shows that error. Errors from `uart_ics.json` / `devices_info.json` are logged; they do not overwrite a devices.json error
+- If `devices.json` is missing or invalid, Device Status shows that error. Errors from `serial_ports.json` / `devices_info.json` are logged; they do not overwrite a devices.json error
 
 ## Port Settings dialog
 - Open by **click** on the main **Settings** value
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
 - Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3) — used when the port’s VID:PID has no `uart_ics.json` match and no device is identified (same fallback as Baud → `STANDARD_BAUD_RATES`). An identified device’s own `serial_parameters` lists win when present; chip catalog lists do not replace these:
+- Lists (slide 3) — used when the port’s VID:PID has no `serial_ports.json` match and no device is identified (same fallback as Baud → `STANDARD_BAUD_RATES`). An identified device’s own `serial_parameters` lists win when present; chip catalog lists do not replace these:
   - Data: 8, 7, 6, 5
   - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space

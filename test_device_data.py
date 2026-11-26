@@ -20,7 +20,7 @@ from device_data import (
     identified_connected_label,
     load_device_file,
     load_devices_info_file,
-    load_uart_ics_file,
+    load_serial_ports_file,
     match_device_info,
     match_uart_ic,
     migrate_device,
@@ -32,7 +32,7 @@ from device_data import (
 
 ROOT = Path(__file__).resolve().parent
 DEVICES_JSON = ROOT / "devices.json"
-UART_ICS_JSON = ROOT / "uart_ics.json"
+SERIAL_PORTS_JSON = ROOT / "serial_ports.json"
 DEVICES_INFO_JSON = ROOT / "devices_info.json"
 
 
@@ -306,26 +306,26 @@ class DeviceColumnTests(unittest.TestCase):
         self.assertEqual(command_steps(hmp), [("*idn?\r", 1.0)])
 
 
-class UartIcsFileTests(unittest.TestCase):
+class SerialPortsFileTests(unittest.TestCase):
     def test_shipped_file_parses_and_has_erics_chips(self):
-        with open(UART_ICS_JSON, encoding="utf-8") as handle:
+        with open(SERIAL_PORTS_JSON, encoding="utf-8") as handle:
             raw = json.load(handle)
-        payload, error = load_uart_ics_file(str(UART_ICS_JSON))
+        payload, error = load_serial_ports_file(str(SERIAL_PORTS_JSON))
         self.assertIsNone(error)
-        self.assertEqual(len(raw["uart_ics"]), len(payload["uart_ics"]))
-        models = [ic["model"] for ic in payload["uart_ics"]]
+        self.assertEqual(len(raw["serial_ports"]), len(payload["serial_ports"]))
+        models = [ic["model"] for ic in payload["serial_ports"]]
         self.assertIn("FT232R/RL/RQ", models)
         self.assertIn("PL2303HX/TA/SA/RA", models)
         self.assertIn("CP210x (CP2102/2104/2105/2108)", models)
-        for ic in payload["uart_ics"]:
+        for ic in payload["serial_ports"]:
             self.assertTrue(str(ic["vid"]).startswith("0x"))
             self.assertIn("vid", ic)
             self.assertIn("manufacturer", ic)
             self.assertIn("model", ic)
 
     def test_missing_and_invalid_files(self):
-        payload, error = load_uart_ics_file(str(ROOT / "no_such_uart_ics.json"))
-        self.assertEqual(payload, {"uart_ics": []})
+        payload, error = load_serial_ports_file(str(ROOT / "no_such_serial_ports.json"))
+        self.assertEqual(payload, {"serial_ports": []})
         self.assertIn("missing", error)
         self.assertIn("no known UART ICs", error)
         handle, path = tempfile.mkstemp(suffix=".json")
@@ -333,15 +333,40 @@ class UartIcsFileTests(unittest.TestCase):
         try:
             with open(path, "w", encoding="utf-8") as out:
                 out.write("{not json")
-            payload, error = load_uart_ics_file(path)
-            self.assertEqual(payload, {"uart_ics": []})
+            payload, error = load_serial_ports_file(path)
+            self.assertEqual(payload, {"serial_ports": []})
             self.assertIn("not valid JSON", error)
         finally:
             os.unlink(path)
 
+    def test_old_uart_ics_root_key_still_loads(self):
+        handle, path = tempfile.mkstemp(suffix=".json")
+        os.close(handle)
+        try:
+            with open(path, "w", encoding="utf-8") as out:
+                json.dump(
+                    {
+                        "uart_ics": [
+                            {
+                                "manufacturer": "FTDI",
+                                "model": "Legacy",
+                                "vid": "0x0403",
+                                "pid": "0x6001",
+                            }
+                        ]
+                    },
+                    out,
+                )
+            payload, error = load_serial_ports_file(path)
+            self.assertIsNone(error)
+            self.assertEqual(payload["serial_ports"][0]["model"], "Legacy")
+            self.assertNotIn("uart_ics", payload)
+        finally:
+            os.unlink(path)
+
     def test_vid_pid_lookup_prefers_exact_and_allows_vid_only(self):
-        payload, _error = load_uart_ics_file(str(UART_ICS_JSON))
-        ics = payload["uart_ics"]
+        payload, _error = load_serial_ports_file(str(SERIAL_PORTS_JSON))
+        ics = payload["serial_ports"]
         ftdi = match_uart_ic(ics, "0x0403", "0x6001")
         self.assertEqual(ftdi["manufacturer"], "FTDI")
         self.assertEqual(uart_ic_label(ftdi), "FTDI FT232R/RL/RQ")

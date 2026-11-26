@@ -40,7 +40,7 @@ from device_data import (  # noqa: E402
     format_device_column,
     load_device_file,
     load_devices_info_file,
-    load_uart_ics_file,
+    load_serial_ports_file,
 )
 from device_editor import DeviceEditorApp  # noqa: E402
 from device_data import STANDARD_BAUD_RATES  # noqa: E402
@@ -275,7 +275,7 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
 
     def test_available_row_uses_uart_ic_when_vid_pid_matches(self):
         app = _bare_app()
-        app.uart_ics, error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.serial_ports, error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
         self.assertIsNone(error)
         app.devices_info = {"devices": []}
         self.assertEqual(
@@ -308,7 +308,7 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
 
     def test_identified_row_prefers_devices_info_short_description(self):
         app = _bare_app()
-        app.uart_ics = {"uart_ics": []}
+        app.serial_ports = {"serial_ports": []}
         app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
         self.assertIsNone(error)
         mb607 = _device_by_model("MB607")
@@ -479,7 +479,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._devices_load_error = None
         app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
         app.device_definitions = {"devices": [mb607]}
-        app.uart_ics = {"uart_ics": []}
+        app.serial_ports = {"serial_ports": []}
         app.devices_info = {"devices": []}
         app.port_data = [("Open", "COM3", "0x0403:0x6001", None, "FTDI", None)]
         app._port_bottom_status_by_port = {"COM3": "Opened"}
@@ -516,7 +516,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
     def test_select_payload_with_and_without_catalog_matches(self):
         app = _bare_app()
         mb607 = _device_by_model("MB607")
-        app.uart_ics, uart_error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.serial_ports, uart_error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
         app.devices_info, info_error = load_devices_info_file(str(ROOT / "devices_info.json"))
         self.assertIsNone(uart_error)
         self.assertIsNone(info_error)
@@ -630,7 +630,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM99"
         app._identified_device_by_port = {}
-        app.uart_ics, _error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.serial_ports, _error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
         app.devices_info = {"devices": []}
         expected = {
             "data_bits": DATA_BITS_CHOICES,
@@ -664,7 +664,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM99"
         app._identified_device_by_port = {"COM99": device}
-        app.uart_ics, _error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.serial_ports, _error = load_serial_ports_file(str(ROOT / "serial_ports.json"))
         app.devices_info = {"devices": []}
         self.assertEqual(
             app._settings_choices_for_current_port(),

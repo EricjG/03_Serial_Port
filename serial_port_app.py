@@ -25,7 +25,7 @@ from device_data import (
     identified_connected_label,
     load_device_file,
     load_devices_info_file,
-    load_uart_ics_file,
+    load_serial_ports_file,
     match_device_info,
     match_uart_ic,
     migrate_device,
@@ -67,7 +67,7 @@ from picker_logic import (
 )
 
 DEVICES_JSON = "devices.json"
-UART_ICS_JSON = "uart_ics.json"
+SERIAL_PORTS_JSON = "serial_ports.json"
 DEVICES_INFO_JSON = "devices_info.json"
 
 APP_VERSION = "3.0"
@@ -157,7 +157,7 @@ class SerialPortApp:
         self._port_bottom_status_by_port = {}
         self._suppress_port_status_event = False
         self._devices_load_error = None
-        self._uart_ics_error = None
+        self._serial_ports_error = None
         self._devices_info_error = None
         self._identify_fail_count = 0
         self._identify_fail_key = None
@@ -1830,7 +1830,7 @@ class SerialPortApp:
         return description or "Unknown"
 
     def _uart_ic_list(self):
-        return uart_ic_list(getattr(self, "uart_ics", None))
+        return uart_ic_list(getattr(self, "serial_ports", None))
 
     def _devices_info_list(self):
         return devices_info_list(getattr(self, "devices_info", None))
@@ -1875,13 +1875,15 @@ class SerialPortApp:
         self.device_definitions, self._devices_load_error = load_device_file(
             DEVICES_JSON
         )
-        self.uart_ics, self._uart_ics_error = load_uart_ics_file(UART_ICS_JSON)
+        self.serial_ports, self._serial_ports_error = load_serial_ports_file(
+            SERIAL_PORTS_JSON
+        )
         self.devices_info, self._devices_info_error = load_devices_info_file(
             DEVICES_INFO_JSON
         )
         if log_errors:
-            if self._uart_ics_error:
-                self._log(self._uart_ics_error)
+            if self._serial_ports_error:
+                self._log(self._serial_ports_error)
             if self._devices_info_error:
                 self._log(self._devices_info_error)
 
@@ -2285,7 +2287,7 @@ class SerialPortApp:
         self._log("Device scan...")
         try:
             device_definitions, load_error = load_device_file(DEVICES_JSON)
-            uart_ics, uart_error = load_uart_ics_file(UART_ICS_JSON)
+            serial_ports, uart_error = load_serial_ports_file(SERIAL_PORTS_JSON)
             devices_info, info_error = load_devices_info_file(DEVICES_INFO_JSON)
 
             comports, by_device = self._comports_by_device()
@@ -2362,7 +2364,7 @@ class SerialPortApp:
                     port_data,
                     load_error,
                     identified_map,
-                    uart_ics,
+                    serial_ports,
                     uart_error,
                     devices_info,
                     info_error,
@@ -2379,16 +2381,16 @@ class SerialPortApp:
         port_data,
         load_error=None,
         identified_map=None,
-        uart_ics=None,
+        serial_ports=None,
         uart_error=None,
         devices_info=None,
         info_error=None,
     ):
         self.device_definitions = device_definitions
         self._devices_load_error = load_error
-        if uart_ics is not None:
-            self.uart_ics = uart_ics
-            self._uart_ics_error = uart_error
+        if serial_ports is not None:
+            self.serial_ports = serial_ports
+            self._serial_ports_error = uart_error
             if uart_error:
                 self._log(uart_error)
         if devices_info is not None:

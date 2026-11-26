@@ -1,5 +1,5 @@
 {
-  "uart_ics": [
+  "serial_ports": [
     {
       "manufacturer": "FTDI",
       "model": "FT232R/RL/RQ",

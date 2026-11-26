@@ -188,7 +188,7 @@ def _choice_labels(value, label_of):
 def settings_choices_for_picker(device=None, uart_ic=None):
     """Settings dialog Data/Stop/Parity/Flow lists.
 
-    Unknown port (no uart_ics.json VID:PID match) and no identified device
+    Unknown port (no serial_ports.json VID:PID match) and no identified device
     use the UI-slide lists. A device's own serial_parameters win when a
     device is identified. Chip catalog lists do not replace the slide lists
     when no device is identified.

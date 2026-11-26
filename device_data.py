@@ -134,7 +134,7 @@ def baud_rates_for_device(device):
 def baud_rates_for_picker(device=None, uart_ic=None):
     """Baud dropdown: selected device rates win; otherwise STANDARD_BAUD_RATES.
 
-    uart_ics.json is not used. An unknown port (no VID/PID match) with no
+    serial_ports.json is not used. An unknown port (no VID/PID match) with no
     device selected/identified stays on the UI-slide standard list (no 600).
     """
     if device:
@@ -369,7 +369,7 @@ def load_device_file(path):
 
 
 def migrate_uart_ic(entry):
-    """Normalize one uart_ics entry. Returns (entry, error) — error means skip it."""
+    """Normalize one serial_ports.json chip entry. Returns (entry, error) — error means skip it."""
     if not isinstance(entry, dict):
         return None, "uart ic entry is not an object"
     vid = format_usb_id(entry.get("vid"))
@@ -391,22 +391,34 @@ def migrate_uart_ic(entry):
     return migrated, None
 
 
-def migrate_uart_ics_payload(data):
-    """Return (payload, error). payload always has a uart_ics list."""
-    if not isinstance(data, dict) or not isinstance(data.get("uart_ics"), list):
-        return {"uart_ics": []}, "uart_ics.json has no uart_ics list"
+def _serial_ports_rows(data):
+    """Chip list from serial_ports.json. Accepts the old uart_ics root key."""
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("serial_ports"), list):
+        return data["serial_ports"]
+    if isinstance(data.get("uart_ics"), list):
+        return data["uart_ics"]
+    return None
+
+
+def migrate_serial_ports_payload(data):
+    """Return (payload, error). payload always has a serial_ports list."""
+    rows = _serial_ports_rows(data)
+    if rows is None:
+        return {"serial_ports": []}, "serial_ports.json has no serial_ports list"
     ics = []
-    for item in data["uart_ics"]:
+    for item in rows:
         migrated, error = migrate_uart_ic(item)
         if migrated is not None:
             ics.append(migrated)
-    return {"uart_ics": ics}, None
+    return {"serial_ports": ics}, None
 
 
-def load_uart_ics_file(path):
-    """Read uart_ics.json. Never raises. Returns (payload, error_or_None)."""
-    empty = {"uart_ics": []}
-    name = os.path.basename(path) if path else "uart_ics.json"
+def load_serial_ports_file(path):
+    """Read serial_ports.json. Never raises. Returns (payload, error_or_None)."""
+    empty = {"serial_ports": []}
+    name = os.path.basename(path) if path else "serial_ports.json"
     if not path or not os.path.exists(path):
         return empty, f"{name} is missing — no known UART ICs."
     try:
@@ -416,7 +428,7 @@ def load_uart_ics_file(path):
         return empty, f"{name} is not valid JSON — no known UART ICs."
     except OSError:
         return empty, f"{name} could not be read — no known UART ICs."
-    payload, error = migrate_uart_ics_payload(data)
+    payload, error = migrate_serial_ports_payload(data)
     if error:
         return payload, f"{name} is invalid — no known UART ICs."
     return payload, None
@@ -468,7 +480,7 @@ def load_devices_info_file(path):
 
 def uart_ic_list(payload):
     if isinstance(payload, dict):
-        return payload.get("uart_ics") or []
+        return payload.get("serial_ports") or payload.get("uart_ics") or []
     if isinstance(payload, list):
         return payload
     return []
@@ -483,7 +495,7 @@ def devices_info_list(payload):
 
 
 def match_uart_ic(ics, vid, pid=None):
-    """Matched uart_ics entry for a port VID/PID, or None.
+    """Matched serial_ports.json chip entry for a port VID/PID, or None.
 
     An entry with no pid matches any product ID from that vendor. Prefer an
     exact VID+PID hit over a vid-only entry.
