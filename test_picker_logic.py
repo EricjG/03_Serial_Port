@@ -18,7 +18,10 @@ from picker_logic import (
     MODE_MANUAL,
     apply_device_pick,
     apply_header_button_click,
+    format_identify_error,
     format_identify_reply_preview,
+    format_port_scan_header,
+    format_scan_usb_id,
     format_serial_frame,
     identify_attempt_message,
     identify_attempt_result,
@@ -684,32 +687,68 @@ class DevicePickSideEffectTests(unittest.TestCase):
 
 class IdentifyAttemptMessageTests(unittest.TestCase):
     mb607 = {"manufacturer": "MUX Wiring", "model": "MB607"}
+    sim = {"manufacturer": "SIMCom", "model": "SIM7080"}
 
     def test_frame_is_classic_8n1(self):
         self.assertEqual(format_serial_frame(8, "N", 1), "8N1")
         self.assertEqual(format_serial_frame(8, "None", 1), "8N1")
         self.assertEqual(format_serial_frame(7, "Even", 2), "7E2")
 
-    def test_trying_line_names_device_port_and_settings(self):
+    def test_scan_usb_id_uses_slash_and_missing_labels(self):
+        self.assertEqual(format_scan_usb_id(0x10C4, 0xEA60), "0x10C4/0xEA60")
+        self.assertEqual(format_scan_usb_id("0x10C4:0xEA60"), "0x10C4/0xEA60")
+        self.assertEqual(format_scan_usb_id("0x0403"), "0x0403")
+        self.assertEqual(format_scan_usb_id(None), "no USB ID")
+        self.assertEqual(format_scan_usb_id(None, empty="any"), "any")
+
+    def test_port_header_shows_vid_pid_or_no_usb_id(self):
         self.assertEqual(
-            identify_attempt_message(
-                self.mb607, "COM5", 115200, "8N1", matched=True
-            ),
-            "Trying MUX Wiring MB607 on COM5 @ 115200 8N1... matched",
+            format_port_scan_header("COM8", 0x10C4, 0xEA60),
+            "Port: COM8 (0x10C4/0xEA60)",
+        )
+        self.assertEqual(
+            format_port_scan_header("COM3"),
+            "Port: COM3 (no USB ID)",
         )
 
-    def test_results_cover_skip_empty_and_mismatch(self):
+    def test_device_line_matches_eric_layout(self):
+        self.assertEqual(
+            identify_attempt_message(
+                self.sim, 115200, "8N1", "0x0403", skipped_vid_pid=True
+            ),
+            "Device: SIMCom SIM7080 115200 8N1 (0x0403): "
+            "Skipped, port ID doesn't match",
+        )
+        self.assertEqual(
+            identify_attempt_message(
+                self.mb607, 460800, "8N1", "0x10C4/0xEA60", reply=""
+            ),
+            "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response",
+        )
+        self.assertEqual(
+            identify_attempt_message(
+                self.mb607, 115200, "8N1", "0x10C4/0xEA60", matched=True
+            ),
+            "Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched",
+        )
+
+    def test_results_cover_skip_empty_mismatch_and_error(self):
         self.assertEqual(
             identify_attempt_result(skipped_vid_pid=True),
-            "skipped: VID/PID doesn't match",
+            "Skipped, port ID doesn't match",
         )
-        self.assertEqual(identify_attempt_result(matched=True), "matched")
-        self.assertEqual(identify_attempt_result(reply=""), "no response")
-        self.assertEqual(identify_attempt_result(reply=None), "no response")
+        self.assertEqual(identify_attempt_result(matched=True), "Matched")
+        self.assertEqual(identify_attempt_result(reply=""), "No response")
+        self.assertEqual(identify_attempt_result(reply=None), "No response")
         self.assertEqual(
             identify_attempt_result(reply="RevPK nope"),
-            "reply did not match: 'RevPK nope'",
+            "No match: 'RevPK nope'",
         )
+        self.assertEqual(
+            identify_attempt_result(error="port busy"),
+            "Error: port busy",
+        )
+        self.assertEqual(format_identify_error(RuntimeError("boom\nmore")), "boom")
 
     def test_mismatch_preview_is_repr_escaped_and_truncated(self):
         self.assertEqual(
@@ -718,14 +757,20 @@ class IdentifyAttemptMessageTests(unittest.TestCase):
         )
         long_reply = "RevPK" + ("x" * 80)
         preview = format_identify_reply_preview(long_reply)
-        self.assertEqual(preview, repr(long_reply[:40]))
-        self.assertEqual(len(long_reply[:40]), 40)
+        self.assertEqual(preview, repr(long_reply[:30]))
+        self.assertEqual(len(long_reply[:30]), 30)
         self.assertEqual(
             identify_attempt_message(
-                self.mb607, "COM5", 460800, "8N1", reply=long_reply
+                self.mb607, 460800, "8N1", "0x10C4/0xEA60", reply=long_reply
             ),
-            "Trying MUX Wiring MB607 on COM5 @ 460800 8N1... "
-            f"reply did not match: {repr(long_reply[:40])}",
+            "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): "
+            f"No match: {repr(long_reply[:30])}",
+        )
+        self.assertEqual(
+            identify_attempt_message(
+                {"manufacturer": "Any", "model": "Box"}, 9600, "8N1", None, matched=True
+            ),
+            "Device: Any Box 9600 8N1 (any): Matched",
         )
 
 
