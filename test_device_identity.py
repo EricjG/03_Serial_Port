@@ -181,6 +181,10 @@ class VendorIdMatchTests(unittest.TestCase):
             ["MB607"],
         )
         self.assertEqual(
+            [d["model"] for d in _devices_for_vid("0x067B")],
+            ["MB607"],
+        )
+        self.assertEqual(
             [d["model"] for d in _devices_for_vid("1234")],
             ["HMP4040"],
         )
@@ -1018,7 +1022,7 @@ class DeviceEditorLoadTests(unittest.TestCase):
             PORT_VID_PID_LABEL: vid_field,
         }
         editor.load_device_details()
-        vid_field.insert.assert_called_with(0, "0x10C4:0xEA60")
+        vid_field.insert.assert_called_with(0, "0x10C4:0xEA60, 0x067B:0x2303")
 
     def test_missing_file_or_key_returns_empty_list(self):
         self.assertEqual(

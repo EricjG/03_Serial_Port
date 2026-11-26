@@ -97,7 +97,10 @@ Example:
       "manufacturer": "MUX Wiring",
       "model": "MB607",
       "type": "Body Control Module",
-      "controllers": [{"vid": "0x10C4", "pid": "0xEA60"}],
+      "controllers": [
+        {"vid": "0x10C4", "pid": "0xEA60"},
+        {"vid": "0x067B", "pid": "0x2303"}
+      ],
       "serial_parameters": {
         "baud_rates": [460800, 115200],
         "data_bits": 8,
