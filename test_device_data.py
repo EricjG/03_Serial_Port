@@ -210,8 +210,12 @@ class OnDiskSchemaTests(unittest.TestCase):
         self.assertEqual(mb607["serial_parameters"]["baud_rates"], [460800, 115200])
         self.assertEqual(
             mb607["controllers"],
-            [{"vid": "0x10C4", "pid": "0xEA60"}],
+            [
+                {"vid": "0x10C4", "pid": "0xEA60"},
+                {"vid": "0x067B", "pid": "0x2303"},
+            ],
         )
+        self.assertEqual(len(mb607["controllers"]), 2)
         self.assertEqual(mb607["type"], "Body Control Module")
 
 
@@ -266,7 +270,10 @@ class BaudAndMatchTests(unittest.TestCase):
         self.assertTrue(device_matches_ids(mb607, "0x10C4"))
         self.assertTrue(device_matches_ids(mb607, "0x10C4:0xEA60"))
         self.assertTrue(device_matches_ids(mb607, 0x10C4, 0xEA60))
+        self.assertTrue(device_matches_ids(mb607, "0x067B", "0x2303"))
+        self.assertTrue(device_matches_ids(mb607, 0x067B, 0x2303))
         self.assertFalse(device_matches_ids(mb607, 0x10C4, 0x0001))
+        self.assertFalse(device_matches_ids(mb607, 0x067B, 0x0001))
         self.assertFalse(device_matches_ids(mb607, 1027))
         sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")
         self.assertTrue(device_matches_ids(sim, "0x0403", 0x6001))

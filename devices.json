@@ -43,6 +43,10 @@
         {
           "vid": "0x10C4",
           "pid": "0xEA60"
+        },
+        {
+          "vid": "0x067B",
+          "pid": "0x2303"
         }
       ],
       "serial_parameters": {

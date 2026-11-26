@@ -14,8 +14,14 @@ from picker_logic import (
     PARITY_CHOICES,
     STOP_BITS_CHOICES,
     UNKNOWN_DEVICE_MESSAGE,
+    MODE_AUTOMATIC,
+    MODE_MANUAL,
     apply_device_pick,
     apply_header_button_click,
+    format_identify_reply_preview,
+    format_serial_frame,
+    identify_attempt_message,
+    identify_attempt_result,
     check_button_char_width,
     device_identity_key,
     device_message_text,
@@ -632,6 +638,35 @@ class DevicePickSideEffectTests(unittest.TestCase):
         self.assertFalse(result["apply_settings"])
         self.assertFalse(result["mark_port_unknown"])
 
+    def test_manual_mode_does_not_apply_port_settings(self):
+        result = apply_device_pick(
+            ("SIMCom", "SIM7080"),
+            self.mb607,
+            baud="115.2K",
+            settings="8 - 1 - None - None",
+            port_status="Opened",
+            mode=MODE_MANUAL,
+        )
+        self.assertFalse(result["apply_baud"])
+        self.assertFalse(result["apply_settings"])
+        self.assertEqual(result["baud"], "115.2K")
+        self.assertEqual(result["settings"], "8 - 1 - None - None")
+
+    def test_automatic_mode_may_apply_device_settings(self):
+        result = apply_device_pick(
+            ("SIMCom", "SIM7080"),
+            self.mb607,
+            baud="115.2K",
+            settings="8 - 1 - None - None",
+            port_status="Opened",
+            mode=MODE_AUTOMATIC,
+        )
+        self.assertTrue(result["apply_baud"])
+        self.assertTrue(result["apply_settings"])
+        self.assertEqual(result["baud"], "115.2K")
+        self.assertEqual(result["port_status"], "Opened")
+        self.assertFalse(result["mark_port_unknown"])
+
     def test_same_device_pick_keeps_failure_count(self):
         result = apply_device_pick(
             ("MUX Wiring", "MB607"),
@@ -645,6 +680,53 @@ class DevicePickSideEffectTests(unittest.TestCase):
         self.assertEqual(result["fail_count"], 2)
         self.assertEqual(result["device_status"], "2nd Failure")
         self.assertEqual(result["port_status"], "Opened")
+
+
+class IdentifyAttemptMessageTests(unittest.TestCase):
+    mb607 = {"manufacturer": "MUX Wiring", "model": "MB607"}
+
+    def test_frame_is_classic_8n1(self):
+        self.assertEqual(format_serial_frame(8, "N", 1), "8N1")
+        self.assertEqual(format_serial_frame(8, "None", 1), "8N1")
+        self.assertEqual(format_serial_frame(7, "Even", 2), "7E2")
+
+    def test_trying_line_names_device_port_and_settings(self):
+        self.assertEqual(
+            identify_attempt_message(
+                self.mb607, "COM5", 115200, "8N1", matched=True
+            ),
+            "Trying MUX Wiring MB607 on COM5 @ 115200 8N1... matched",
+        )
+
+    def test_results_cover_skip_empty_and_mismatch(self):
+        self.assertEqual(
+            identify_attempt_result(skipped_vid_pid=True),
+            "skipped: VID/PID doesn't match",
+        )
+        self.assertEqual(identify_attempt_result(matched=True), "matched")
+        self.assertEqual(identify_attempt_result(reply=""), "no response")
+        self.assertEqual(identify_attempt_result(reply=None), "no response")
+        self.assertEqual(
+            identify_attempt_result(reply="RevPK nope"),
+            "reply did not match: 'RevPK nope'",
+        )
+
+    def test_mismatch_preview_is_repr_escaped_and_truncated(self):
+        self.assertEqual(
+            format_identify_reply_preview("ok\r\n"),
+            "'ok\\r\\n'",
+        )
+        long_reply = "RevPK" + ("x" * 80)
+        preview = format_identify_reply_preview(long_reply)
+        self.assertEqual(preview, repr(long_reply[:40]))
+        self.assertEqual(len(long_reply[:40]), 40)
+        self.assertEqual(
+            identify_attempt_message(
+                self.mb607, "COM5", 460800, "8N1", reply=long_reply
+            ),
+            "Trying MUX Wiring MB607 on COM5 @ 460800 8N1... "
+            f"reply did not match: {repr(long_reply[:40])}",
+        )
 
 
 class HandoffPayloadTests(unittest.TestCase):

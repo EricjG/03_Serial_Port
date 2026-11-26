@@ -50,7 +50,9 @@ Three JSON files sit in this folder (a later change will move them to a shared d
 
 A missing or invalid file shows a message and does not crash. If `devices.json` already has an error on Device Status, later file errors are logged and the app stays usable with a null match.
 
-The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). The **Baud** dropdown is also driven by that file: a port whose VID/PID matches a chip lists that chip's `serial_parameters.baud_rates` (or `STANDARD_BAUD_RATES` clipped to `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port uses the standard baud list (no 600). Selecting a device does not shrink the Baud list; it only preselects the device's first baud when that rate is already in the list.
+The picker uses `serial_ports.json` for Available / In Use "Serial Driver / Connected Device" text (`FTDI FT232R/RL/RQ`). The **Baud** dropdown is also driven by that file: a port whose VID/PID matches a chip lists that chip's `serial_parameters.baud_rates` (or `STANDARD_BAUD_RATES` clipped to `min_baud`..`max_baud` if `baud_rates` is missing). An unknown port uses the standard baud list (no 600). Selecting a device in Manual mode does not shrink the Baud list and does not change Baud or Port Settings; only automatic matching may apply the device's settings.
+
+Scan Devices and Identify print one line per try in the terminal, for example `Trying MUX Wiring MB607 on COM5 @ 115200 8N1...` followed by `matched`, `no response`, `reply did not match: '<first ~40 chars, repr-escaped>'`, or `skipped: VID/PID doesn't match`. Existing scan summary lines (`FOUND` / `NOT FOUND` / skipped In Use) stay.
 
 Identified rows show manufacturer, model, and short description from `devices_info.json` when present, otherwise the existing identify `device_column` text.
 
@@ -95,7 +97,10 @@ Example:
       "manufacturer": "MUX Wiring",
       "model": "MB607",
       "type": "Body Control Module",
-      "controllers": [{"vid": "0x10C4", "pid": "0xEA60"}],
+      "controllers": [
+        {"vid": "0x10C4", "pid": "0xEA60"},
+        {"vid": "0x067B", "pid": "0x2303"}
+      ],
       "serial_parameters": {
         "baud_rates": [460800, 115200],
         "data_bits": 8,
