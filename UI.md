@@ -89,7 +89,7 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Still inside the orange frame, not in a blue box
 - Left: **Port Status:** [value] and **Device Status:** [value] inline (exception to labels-above)
 - Right: **Select** then **Exit**, each 96px, 8px apart; Exit’s right edge is the common right edge
-- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. Each is sized from the longest value it can show (Port Status: **Unknown**; Device Status: **Unidentified**, which is longer than **Identified** and **10th Failure**), with wrap width rounded up to the 8px grid so the bottom row stays on-grid. The fields must show those words in full — not `Unidenti`.
+- Status fields are 24px high with the same 1px outline, vertically centered with Select / Exit. They are Labels (not character-width entries). Wrap width is `Font.measure()` of the longest value on the **widget’s actual font** (Segoe UI or the Linux fallback), plus the label padx and the 1px outline, plus 8px slack so the last glyph is not clipped, then rounded up to the 8px grid. Longest values: Port Status **Unknown**; Device Status **Unidentified** (longer than **Identified** and **10th Failure**).
 - Port Status words: **Closed** (default / after close), **Opened** (open succeeded), **Failed** (open failed / timeout), **Unknown** (Port Settings / Baud changed). Picking a Device does **not** set Port Status to Unknown
 - Device Status words: **Unidentified** until Identify or Scan Devices confirms the selected dropdown device on that port, then **Identified**. Picking a *different* device in the dropdown returns Device Status to **Unidentified** and clears the Identify failure count
 - Identify button failures (same device, try-again): **Failed**, then **2nd Failure**, **3rd Failure**, **4th Failure**, … (normal English ordinals: 11th, 21st, 22nd, 23rd). A successful Scan Devices confirmation of the selected device sets **Identified** and clears the count. A Scan Devices miss does not increment this count
@@ -100,7 +100,7 @@ When the list is empty, only the header buttons and Exit stay enabled.
 - Orange 3px outer border; 8px padding; light-blue box with black 1px outline
 - Title **Port Settings** upper-left in the blue box
 - Defaults: Data Bits 8, Stop Bits 1, Parity None, Flow None
-- Lists (slide 3):
+- Lists (slide 3) — used when the port’s VID:PID has no `uart_ics.json` match and no device is identified (same fallback as Baud → `STANDARD_BAUD_RATES`). An identified device’s own `serial_parameters` lists win when present; chip catalog lists do not replace these:
   - Data: 8, 7, 6, 5
   - Stop: 1, 2
   - Parity: None, Odd, Even, Mark, Space

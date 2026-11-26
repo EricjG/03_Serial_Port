@@ -131,6 +131,17 @@ def baud_rates_for_device(device):
     return list(rates) if rates else list(STANDARD_BAUD_RATES)
 
 
+def baud_rates_for_picker(device=None, uart_ic=None):
+    """Baud dropdown: selected device rates win; otherwise STANDARD_BAUD_RATES.
+
+    uart_ics.json is not used. An unknown port (no VID/PID match) with no
+    device selected/identified stays on the UI-slide standard list (no 600).
+    """
+    if device:
+        return baud_rates_for_device(device)
+    return list(STANDARD_BAUD_RATES)
+
+
 def default_baud(device):
     rates = baud_rates_for_device(device)
     return rates[0] if rates else None

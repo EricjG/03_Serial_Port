@@ -43,11 +43,16 @@ from device_data import (  # noqa: E402
     load_uart_ics_file,
 )
 from device_editor import DeviceEditorApp  # noqa: E402
+from device_data import STANDARD_BAUD_RATES  # noqa: E402
 from picker_logic import (  # noqa: E402
+    DATA_BITS_CHOICES,
+    FLOW_CHOICES,
+    PARITY_CHOICES,
+    STOP_BITS_CHOICES,
     exit_handoff_payload,
-    grid_ceil_px,
     longest_device_status_text,
     longest_port_status_text,
+    status_value_width_px,
 )
 from serial_port_app import SerialPortApp, UI_CONTROL_H, UI_PAD  # noqa: E402
 
@@ -572,27 +577,123 @@ class DevicePickAndHandoffTests(unittest.TestCase):
 
     def test_status_fields_fit_longest_value_on_8px_grid(self):
         app = _bare_app()
-        app._control_font = MagicMock()
-        app._control_font.measure.side_effect = lambda s: len(str(s)) * 8
-        device_wrap = MagicMock()
-        port_wrap = MagicMock()
-        device_entry = MagicMock()
-        port_entry = MagicMock()
-        device_entry.master = device_wrap
-        port_entry.master = port_wrap
-        app.device_status_entry = device_entry
-        app.port_status_entry = port_entry
+        font = MagicMock()
+        font.measure.side_effect = lambda s: len(str(s)) * 8
+        app._widget_font = lambda _widget: font
+        app._control_font = font
+
+        def make_value():
+            wrap = MagicMock()
+            wrap.cget.side_effect = lambda key: 1 if key == "highlightthickness" else 0
+            label = MagicMock()
+            label.master = wrap
+            label.cget.side_effect = lambda key: 4 if key == "padx" else 0
+            return wrap, label
+
+        device_wrap, device_label = make_value()
+        port_wrap, port_label = make_value()
+        app.device_status_entry = device_label
+        app.port_status_entry = port_label
 
         app._size_status_fields()
 
-        chrome = app._outlined_field_chrome_px()
-        device_w = grid_ceil_px(len(longest_device_status_text()) * 8 + chrome, UI_PAD)
-        port_w = grid_ceil_px(len(longest_port_status_text()) * 8 + chrome, UI_PAD)
+        font.measure.assert_any_call(longest_device_status_text())
+        font.measure.assert_any_call(longest_port_status_text())
+        device_w = status_value_width_px(
+            len(longest_device_status_text()) * 8,
+            padx=4,
+            border=0,
+            highlight=1,
+            grid=UI_PAD,
+            slack=UI_PAD,
+        )
+        port_w = status_value_width_px(
+            len(longest_port_status_text()) * 8,
+            padx=4,
+            border=0,
+            highlight=1,
+            grid=UI_PAD,
+            slack=UI_PAD,
+        )
         device_wrap.configure.assert_called_with(width=device_w, height=UI_CONTROL_H)
         port_wrap.configure.assert_called_with(width=port_w, height=UI_CONTROL_H)
         self.assertEqual(device_w % UI_PAD, 0)
-        self.assertEqual(port_w % UI_PAD, 0)
         self.assertGreater(device_w, port_w)
+        device_label.configure.assert_not_called()
+
+    def test_unknown_port_without_device_uses_standard_baud_dropdown(self):
+        app = _bare_app()
+        labels = app._baud_labels_for_device(None, uart_ic=None)
+        expected = [
+            SerialPortApp.format_baud(baud) or str(baud)
+            for baud in STANDARD_BAUD_RATES
+        ]
+        self.assertEqual(labels, expected)
+        self.assertNotIn("600", labels)
+        chip = {"serial_parameters": {"baud_rates": [9600]}}
+        self.assertEqual(app._baud_labels_for_device(None, uart_ic=chip), expected)
+
+    def test_selected_device_baud_list_wins_on_unknown_port(self):
+        app = _bare_app()
+        device = _device_by_model("MB607")
+        self.assertEqual(
+            app._baud_labels_for_device(device, uart_ic=None),
+            ["460.8K", "115.2K"],
+        )
+
+    def test_unknown_port_without_identified_device_uses_slide_settings(self):
+        app = _bare_app()
+        app.port_data = [
+            ("Available", "COM99", "0x1234:0x5678", None, "unknown chip", None)
+        ]
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM99"
+        app._identified_device_by_port = {}
+        app.uart_ics, _error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.devices_info = {"devices": []}
+        expected = {
+            "data_bits": DATA_BITS_CHOICES,
+            "stop_bits": STOP_BITS_CHOICES,
+            "parity": PARITY_CHOICES,
+            "flow_control": FLOW_CHOICES,
+        }
+        self.assertEqual(app._settings_choices_for_current_port(), expected)
+        # Known chip, still unidentified: catalog lists must not replace the slide.
+        app.port_data = [
+            ("Available", "COM3", "0x0403:0x6001", None, "FTDI", None)
+        ]
+        app.settings_port_var.get.return_value = "COM3"
+        self.assertEqual(app._settings_choices_for_current_port(), expected)
+
+    def test_identified_device_settings_lists_win_on_unknown_port(self):
+        app = _bare_app()
+        device = {
+            "manufacturer": "MUX Wiring",
+            "model": "MB607",
+            "serial_parameters": {
+                "data_bits": [8],
+                "stop_bits": [1],
+                "parity": ["None"],
+                "flow_control": ["None", "XON/XOFF"],
+            },
+        }
+        app.port_data = [
+            ("Identified", "COM99", "0x1234:0x5678", "MB607", "unknown chip", None)
+        ]
+        app.settings_port_var = MagicMock()
+        app.settings_port_var.get.return_value = "COM99"
+        app._identified_device_by_port = {"COM99": device}
+        app.uart_ics, _error = load_uart_ics_file(str(ROOT / "uart_ics.json"))
+        app.devices_info = {"devices": []}
+        self.assertEqual(
+            app._settings_choices_for_current_port(),
+            {
+                "data_bits": ("8",),
+                "stop_bits": ("1",),
+                "parity": ("None",),
+                "flow_control": ("None", "xOff/xOn"),
+            },
+        )
 
 
 class DeviceEditorLoadTests(unittest.TestCase):

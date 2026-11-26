@@ -9,6 +9,7 @@ from pathlib import Path
 from device_data import (
     STANDARD_BAUD_RATES,
     baud_rates_for_device,
+    baud_rates_for_picker,
     command_steps,
     connected_device_label,
     default_baud,
@@ -222,6 +223,33 @@ class BaudAndMatchTests(unittest.TestCase):
         self.assertEqual(
             baud_rates_for_device({"serial_parameters": {}}),
             list(STANDARD_BAUD_RATES),
+        )
+
+    def test_unknown_port_without_a_device_uses_the_standard_baud_list(self):
+        self.assertEqual(
+            baud_rates_for_picker(device=None, uart_ic=None),
+            list(STANDARD_BAUD_RATES),
+        )
+        # Chip catalog rates must not replace the slide list when no device is selected.
+        chip = {"serial_parameters": {"baud_rates": [9600, 19200]}}
+        self.assertEqual(
+            baud_rates_for_picker(device=None, uart_ic=chip),
+            list(STANDARD_BAUD_RATES),
+        )
+        self.assertNotIn(600, baud_rates_for_picker(None))
+
+    def test_selected_device_rates_win_on_an_unknown_port(self):
+        device = {"serial_parameters": {"baud_rates": [460800, 115200]}}
+        self.assertEqual(
+            baud_rates_for_picker(device=device, uart_ic=None),
+            [460800, 115200],
+        )
+        self.assertEqual(
+            baud_rates_for_picker(
+                device=device,
+                uart_ic={"serial_parameters": {"baud_rates": [9600]}},
+            ),
+            [460800, 115200],
         )
 
     def test_vid_pid_match_hex_and_old_decimal(self):

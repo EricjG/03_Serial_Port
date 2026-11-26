@@ -26,6 +26,7 @@ from picker_logic import (
     grid_ceil_px,
     longest_device_status_text,
     longest_port_status_text,
+    status_value_width_px,
     format_baud_label,
     format_settings_text,
     format_vid_pid,
@@ -42,6 +43,8 @@ from picker_logic import (
     record_identify_failure,
     record_identify_success,
     select_handoff_payload,
+    settings_choices_for_picker,
+    STANDARD_SETTINGS_CHOICES,
     unique_device_labels,
     unique_labeled_items,
     visible_tree_rows,
@@ -363,6 +366,50 @@ class SlideOptionListTests(unittest.TestCase):
         self.assertNotIn("DSR/DTR", FLOW_CHOICES)
         self.assertNotIn("XON/XOFF", FLOW_CHOICES)
 
+    def test_unknown_port_without_identified_device_uses_slide_settings_lists(self):
+        expected = {
+            "data_bits": DATA_BITS_CHOICES,
+            "stop_bits": STOP_BITS_CHOICES,
+            "parity": PARITY_CHOICES,
+            "flow_control": FLOW_CHOICES,
+        }
+        self.assertEqual(STANDARD_SETTINGS_CHOICES, expected)
+        self.assertEqual(
+            settings_choices_for_picker(device=None, uart_ic=None),
+            expected,
+        )
+        chip = {
+            "serial_parameters": {
+                "data_bits": [7, 8],
+                "stop_bits": [1],
+                "parity": ["None", "Even"],
+                "flow_control": ["None", "XON/XOFF"],
+            }
+        }
+        self.assertEqual(
+            settings_choices_for_picker(device=None, uart_ic=chip),
+            expected,
+        )
+
+    def test_identified_device_settings_lists_win_on_unknown_port(self):
+        device = {
+            "serial_parameters": {
+                "data_bits": [8],
+                "stop_bits": [1, 2],
+                "parity": ["None", "Odd"],
+                "flow_control": ["None", "XON/XOFF"],
+            }
+        }
+        self.assertEqual(
+            settings_choices_for_picker(device=device, uart_ic=None),
+            {
+                "data_bits": ("8",),
+                "stop_bits": ("1", "2"),
+                "parity": ("None", "Odd"),
+                "flow_control": ("None", "xOff/xOn"),
+            },
+        )
+
     def test_typical_speeds_drop_600(self):
         values = [value for value, _label in BAUD_SHORT]
         self.assertNotIn(600, values)
@@ -453,6 +500,19 @@ class LayoutTokenTests(unittest.TestCase):
         self.assertEqual(grid_ceil_px(1, 8), 8)
         self.assertEqual(grid_ceil_px(64, 8), 64)
         self.assertEqual(grid_ceil_px(65, 8), 72)
+        # Unidentified at 80px + padx 4*2 + outline 1*2 + 8px slack = 98 → 104
+        self.assertEqual(
+            status_value_width_px(80, padx=4, border=0, highlight=1, grid=8, slack=8),
+            104,
+        )
+        self.assertGreater(
+            status_value_width_px(80, padx=4, highlight=1, slack=8),
+            80,
+        )
+        self.assertEqual(
+            status_value_width_px(80, padx=4, highlight=1, slack=8) % 8,
+            0,
+        )
 
 
 class IdentifyFailureOrdinalTests(unittest.TestCase):

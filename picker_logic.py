@@ -22,6 +22,24 @@ FLOW_ALIASES = {
     "xon/xoff": FLOW_XOFF_XON,
     "xoff/xon": FLOW_XOFF_XON,
 }
+PARITY_LABELS = {
+    "N": "None",
+    "NONE": "None",
+    "O": "Odd",
+    "ODD": "Odd",
+    "E": "Even",
+    "EVEN": "Even",
+    "M": "Mark",
+    "MARK": "Mark",
+    "S": "Space",
+    "SPACE": "Space",
+}
+STANDARD_SETTINGS_CHOICES = {
+    "data_bits": DATA_BITS_CHOICES,
+    "stop_bits": STOP_BITS_CHOICES,
+    "parity": PARITY_CHOICES,
+    "flow_control": FLOW_CHOICES,
+}
 
 PORT_STATUS_CLOSED = "Closed"
 PORT_STATUS_OPENED = "Opened"
@@ -114,6 +132,91 @@ def normalize_flow_choice(flow):
     if mapped:
         return mapped
     return "None"
+
+
+def _data_bits_choice_label(value):
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return str(number)
+
+
+def _stop_bits_choice_label(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number == int(number):
+        return str(int(number))
+    return str(number)
+
+
+def _parity_choice_label(value):
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return None
+    if text in PARITY_CHOICES:
+        return text
+    return PARITY_LABELS.get(text.upper())
+
+
+def _flow_choice_label(value):
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return None
+    if text in FLOW_CHOICES:
+        return text
+    return FLOW_ALIASES.get(text) or FLOW_ALIASES.get(text.upper())
+
+
+def _choice_labels(value, label_of):
+    if value is None or value == "":
+        return None
+    raw = list(value) if isinstance(value, (list, tuple)) else [value]
+    labels = []
+    seen = set()
+    for item in raw:
+        label = label_of(item)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels or None
+
+
+def settings_choices_for_picker(device=None, uart_ic=None):
+    """Settings dialog Data/Stop/Parity/Flow lists.
+
+    Unknown port (no uart_ics.json VID:PID match) and no identified device
+    use the UI-slide lists. A device's own serial_parameters win when a
+    device is identified. Chip catalog lists do not replace the slide lists
+    when no device is identified.
+    """
+    _ = uart_ic
+    if device:
+        params = device.get("serial_parameters") or {}
+        data = _choice_labels(
+            params.get("data_bits", params.get("bytesize")),
+            _data_bits_choice_label,
+        )
+        stop = _choice_labels(
+            params.get("stop_bits", params.get("stopbits")),
+            _stop_bits_choice_label,
+        )
+        parity = _choice_labels(params.get("parity"), _parity_choice_label)
+        flow = _choice_labels(
+            params.get("flow_control", params.get("flow")),
+            _flow_choice_label,
+        )
+        if data or stop or parity or flow:
+            return {
+                "data_bits": tuple(data) if data else DATA_BITS_CHOICES,
+                "stop_bits": tuple(stop) if stop else STOP_BITS_CHOICES,
+                "parity": tuple(parity) if parity else PARITY_CHOICES,
+                "flow_control": tuple(flow) if flow else FLOW_CHOICES,
+            }
+    return dict(STANDARD_SETTINGS_CHOICES)
 
 
 def longest_settings_text(
@@ -293,6 +396,27 @@ def grid_ceil_px(px, grid=8):
     if px <= 0:
         return step
     return ((px + step - 1) // step) * step
+
+
+def status_value_width_px(
+    text_px, padx=0, border=0, highlight=0, grid=8, slack=8
+):
+    """Pixel wrap width for a status value. Never uses character counts.
+
+    text_px comes from Font.measure() on the widget's actual font. slack
+    keeps the last glyph from clipping (Linux fallback fonts ran 1–2px over).
+    """
+    try:
+        text_px = max(0, int(text_px))
+    except (TypeError, ValueError):
+        text_px = 0
+    chrome = (
+        2 * max(0, int(padx or 0))
+        + 2 * max(0, int(border or 0))
+        + 2 * max(0, int(highlight or 0))
+        + max(0, int(slack or 0))
+    )
+    return grid_ceil_px(text_px + chrome, grid)
 
 
 def device_status_text(

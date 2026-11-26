@@ -14,6 +14,7 @@ import time
 
 from device_data import (
     baud_rates_for_device,
+    baud_rates_for_picker,
     command_steps,
     connected_device_label,
     default_baud,
@@ -34,17 +35,13 @@ from device_data import (
 )
 from picker_logic import (
     BAUD_SHORT,
-    DATA_BITS_CHOICES,
     DEFAULT_PARITY,
-    FLOW_CHOICES,
     FLOW_XOFF_XON,
-    PARITY_CHOICES,
     PORT_STATUS_CLOSED,
     PORT_STATUS_FAILED,
     PORT_STATUS_OPENED,
     PORT_STATUS_UNKNOWN,
     DEVICE_STATUS_UNIDENTIFIED,
-    STOP_BITS_CHOICES,
     apply_device_pick,
     apply_header_button_click,
     check_button_char_width,
@@ -54,16 +51,17 @@ from picker_logic import (
     format_baud_label,
     format_settings_text,
     format_vid_pid,
-    grid_ceil_px,
     identified_device_message,
     longest_device_status_text,
     longest_port_status_text,
     longest_settings_text,
+    status_value_width_px,
     picker_control_state,
     picker_device_label,
     record_identify_failure,
     record_identify_success,
     select_handoff_payload,
+    settings_choices_for_picker,
     unique_device_labels,
     visible_tree_rows,
 )
@@ -385,6 +383,27 @@ class SerialPortApp:
         self._lock_control_size(wrap, entry)
         entry.pack(fill=tk.BOTH, expand=True, padx=4, pady=0)
         return wrap, entry
+
+    def _outlined_status_value(self, parent, var, bg="#FFFFFF"):
+        """Read-only status box. Width is set in pixels, never in characters."""
+        wrap = self._outline_box(parent, bg=bg)
+        wrap.configure(height=UI_CONTROL_H)
+        wrap.pack_propagate(False)
+        label = tk.Label(
+            wrap,
+            textvariable=var,
+            font=self._font_control,
+            bg=bg,
+            fg=UI_FG,
+            anchor="w",
+            justify="left",
+            padx=4,
+            pady=0,
+            bd=0,
+            highlightthickness=0,
+        )
+        label.pack(fill=tk.BOTH, expand=True)
+        return wrap, label
 
     def _flat_button(self, parent, text, command=None, width_px=UI_BTN_W):
         wrap = self._outline_box(parent, bg=UI_BTN_GRAY, height=UI_CONTROL_H, width=width_px)
@@ -853,27 +872,67 @@ class SerialPortApp:
         field.configure(width=self._chars_for_text(longest_settings_text(), extra_px=8))
         self._lock_control_size(field.master, field)
 
-    def _outlined_field_chrome_px(self):
-        """Inner padx=4 each side plus the 1px outline each side."""
-        return 8 + 2
+    def _widget_font(self, widget):
+        """Font the widget is actually drawing (Segoe UI or the Linux fallback)."""
+        try:
+            spec = widget.cget("font")
+            if spec:
+                return tkfont.Font(font=spec)
+        except (tk.TclError, TypeError, ValueError):
+            pass
+        return self._control_font
 
-    def _size_outlined_status_entry(self, entry, sample):
-        """Fit `sample` fully; wrap width sits on the 8px grid."""
-        if entry is None:
+    def _tk_px(self, value):
+        if value is None or value == "":
+            return 0
+        if isinstance(value, (tuple, list)):
+            value = value[0] if value else 0
+        text = str(value).split()[0]
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return 0
+
+    def _size_outlined_status_value(self, widget, sample):
+        """Fit `sample` using Font.measure on the widget font, in pixels."""
+        if widget is None:
             return
-        chrome = self._outlined_field_chrome_px()
-        text_px = self._control_font.measure(str(sample))
-        wrap_w = grid_ceil_px(text_px + chrome, UI_PAD)
-        wrap = entry.master
+        wrap = getattr(widget, "master", None)
+        if wrap is None:
+            return
+        font = self._widget_font(widget)
+        try:
+            text_px = int(font.measure(str(sample)))
+        except (TypeError, ValueError, tk.TclError):
+            text_px = int(self._control_font.measure(str(sample)))
+        padx = 4
+        bd = 0
+        highlight = 1
+        try:
+            padx = self._tk_px(widget.cget("padx"))
+            bd = self._tk_px(widget.cget("bd"))
+        except (tk.TclError, TypeError):
+            pass
+        try:
+            highlight = self._tk_px(wrap.cget("highlightthickness"))
+        except (tk.TclError, TypeError):
+            pass
+        wrap_w = status_value_width_px(
+            text_px,
+            padx=padx,
+            border=bd,
+            highlight=highlight,
+            grid=UI_PAD,
+            slack=UI_PAD,
+        )
         wrap.configure(width=wrap_w, height=UI_CONTROL_H)
         wrap.pack_propagate(False)
-        entry.configure(width=self._chars_for_text(sample, extra_px=chrome))
 
     def _size_status_fields(self):
-        self._size_outlined_status_entry(
+        self._size_outlined_status_value(
             getattr(self, "port_status_entry", None), longest_port_status_text()
         )
-        self._size_outlined_status_entry(
+        self._size_outlined_status_value(
             getattr(self, "device_status_entry", None), longest_device_status_text()
         )
 
@@ -891,12 +950,32 @@ class SerialPortApp:
             bases.append(picker_device_label(item, self.format_baud(baud)) or "device")
         self._device_entries = list(zip(unique_device_labels(bases), devices))
 
-    def _baud_labels_for_device(self, device):
+    def _baud_labels_for_device(self, device, uart_ic=None):
         labels = []
-        for baud in baud_rates_for_device(device):
+        for baud in baud_rates_for_picker(device, uart_ic=uart_ic):
             shown = self.format_baud(baud)
             labels.append(shown if shown else str(baud))
         return labels
+
+    def _settings_choices_for_current_port(self):
+        """Data/Stop/Parity/Flow lists: slide defaults unless a device is identified."""
+        port = None
+        if getattr(self, "settings_port_var", None) is not None:
+            port = self._selected_port()
+        identified = None
+        if port:
+            identified = (getattr(self, "_identified_device_by_port", None) or {}).get(
+                port
+            )
+        info = self._device_attributes_for(identified) if identified else None
+        uart_ic = None
+        if port:
+            row = self._port_row(port) if hasattr(self, "port_data") else None
+            vendor_id = row[2] if row else None
+            uart_ic = match_uart_ic(self._uart_ic_list(), vendor_id)
+        return settings_choices_for_picker(
+            device=info or identified, uart_ic=uart_ic
+        )
 
     def _refresh_baud_dropdown(self, device=None, *, apply_default=False):
         combo = getattr(self, "settings_baud_combo", None)
@@ -1554,16 +1633,17 @@ class SerialPortApp:
             wrap.pack(anchor="w")
             return cell
 
-        labeled_combo(white, "Data Bits", data_var, DATA_BITS_CHOICES).grid(
+        choices = self._settings_choices_for_current_port()
+        labeled_combo(white, "Data Bits", data_var, choices["data_bits"]).grid(
             row=0, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
         )
-        labeled_combo(white, "Stop Bits", stop_var, STOP_BITS_CHOICES).grid(
+        labeled_combo(white, "Stop Bits", stop_var, choices["stop_bits"]).grid(
             row=0, column=1, sticky="nw", pady=(0, UI_GAP)
         )
-        labeled_combo(white, "Parity", parity_var, PARITY_CHOICES).grid(
+        labeled_combo(white, "Parity", parity_var, choices["parity"]).grid(
             row=1, column=0, sticky="nw", padx=(0, UI_GROUP_GAP), pady=(0, UI_GAP)
         )
-        labeled_combo(white, "Flow", flow_var, FLOW_CHOICES).grid(
+        labeled_combo(white, "Flow", flow_var, choices["flow_control"]).grid(
             row=1, column=1, sticky="nw", pady=(0, UI_GAP)
         )
 
@@ -1638,12 +1718,11 @@ class SerialPortApp:
                 font=self._font_label,
                 anchor="w",
             ).pack(side=tk.LEFT, padx=(0, UI_GAP), fill=tk.Y)
-            wrap, entry = self._outlined_entry(
-                group, var, self._chars_for_text(sample, extra_px=self._outlined_field_chrome_px())
-            )
+            wrap, value = self._outlined_status_value(group, var)
             wrap.pack(side=tk.LEFT, pady=0)
             self._status_wraps.append(wrap)
-            return entry
+            self._size_outlined_status_value(value, sample)
+            return value
 
         self.port_status_entry = status_group(
             "Port Status:", self.port_status_var, longest_port_status_text()
