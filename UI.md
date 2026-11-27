@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.14 — Port settings ` - ` separators; comma baud; Windows DE-9 icon (Nov 26, 2026).
+Version: 3.15 — In Use header button shows `In Use xN` count (Nov 27, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -32,6 +32,7 @@ Version: 3.14 — Port settings ` - ` separators; comma baud; Windows DE-9 icon 
 - Right: In Use / Scan Ports / Scan Devices, right-aligned on the title row, 16px apart, 24px high
 - Checkbox sits on the button (`place(in_=btn)` then `cb.lift(btn)`); the button is sized from the real checkbox width plus the label so the text is never covered
 - A checked **Scan Ports** or **Scan Devices** box means auto-repeat that action once a second. **In Use** is a view filter only: it shows or hides In Use ports already found and does not start or keep the auto port-scan loop
+- The **In Use** header button label is `In Use xN` (`In Use x0`, `In Use x3`; no space after `x`). N is the number of In Use ports in the **full** port list, not the visible/filtered rows, so the count still shows when the checkbox is off. It updates on port-list refresh/rescan and when a port’s In Use state changes. The button is sized for two-digit counts (`In Use x99`) so the width does not jump or clip. Filter semantics are unchanged
 - Clicking a header button runs that action once and clears the Scan Ports and Scan Devices auto-repeat checkboxes. Scan Ports / Scan Devices leave the In Use checkbox as-is. The In Use button checks In Use and unchecks Scan Ports. Ports this app has Open are never opened or identified by those scans.
 - **Scan Devices** (header) is unchanged; the Manually-panel button is **Identify**. Scan Ports, Scan Devices, auto-scan, and retest never probe a port this app has **Open**. Each of those paths prints that port’s `Port:` header then `Skipped, port is Open`, and leaves the Open row’s Status and Connected Device text alone.
 - Column titles and cells are left-anchored
