@@ -14,6 +14,14 @@ import threading
 import time
 from pathlib import Path
 
+from app_icon import (
+    ICON_PNG_SIZES,
+    app_dir,
+    app_icon_ico_path,
+    app_icon_png_paths,
+    apply_window_icon,
+    set_windows_app_user_model_id,
+)
 from device_data import (
     baud_rates_for_device,
     baud_rates_for_picker,
@@ -38,7 +46,6 @@ from device_data import (
     uart_ic_list,
 )
 from picker_logic import (
-    BAUD_SHORT,
     DEFAULT_PARITY,
     FLOW_XOFF_XON,
     MODE_MANUAL,
@@ -59,6 +66,7 @@ from picker_logic import (
     format_baud_label,
     format_serial_frame,
     format_settings_text,
+    parse_baud,
     SETTINGS_DIALOG_FIELDS,
     format_vid_pid,
     format_port_scan_header,
@@ -129,30 +137,10 @@ UI_TREE_COL_WIDTHS = {
     "Port #": 64,
     "ID/Baud": 110,
 }
-APP_DIR = Path(__file__).resolve().parent
-ICON_PNG_SIZES = (16, 32, 48, 256)
-ICON_ICO_NAME = "serial_icon.ico"
-ICON_PNG_NAME = "serial_icon.png"
+APP_DIR = app_dir()
 LONGEST_PORT_SAMPLE = "/tmp/serialdemo/ttyUSB0"
-
-
-def app_icon_png_paths(root=APP_DIR):
-    assets = Path(root) / "assets"
-    paths = []
-    for size in ICON_PNG_SIZES:
-        path = assets / f"serial_icon_{size}.png"
-        if path.is_file():
-            paths.append(path)
-    hero = assets / ICON_PNG_NAME
-    if hero.is_file() and hero not in paths:
-        paths.append(hero)
-    return tuple(paths)
-
-
-def app_icon_ico_path(root=APP_DIR):
-    path = Path(root) / "assets" / ICON_ICO_NAME
-    return path if path.is_file() else None
-BAUD_COMBO_CHARS = 8
+BAUD_COMBO_SAMPLE = "1,000,000"
+BAUD_COMBO_CHARS = 9
 BAUD_COMBO_WIDTH_SCALE = 1.5
 # Arrow glyph size for 24px controls (1px wrap outline leaves ~22px inside).
 PICKER_COMBOBOX_ARROWSIZE = UI_CONTROL_H // 2
@@ -325,8 +313,9 @@ class SerialPortApp:
             self._device_entries[0][1] if self._device_entries else None
         )
 
+        set_windows_app_user_model_id()
         self._icon_photos = []
-        self._apply_window_icon(self.root)
+        self._apply_window_icon(self.root, default=True)
         self._init_fonts()
         style = ttk.Style()
         style.configure(
@@ -364,36 +353,11 @@ class SerialPortApp:
         self.root.after(100, self.start_initial_scan)
 
     # ------------------------------------------------------------------ UI
-    def _apply_window_icon(self, win):
+    def _apply_window_icon(self, win, default=False):
         """Replace the Tk feather with the DE-9 serial-port icon."""
-        if win is None:
-            return
-        photos = getattr(self, "_icon_photos", None)
-        if not photos:
-            photos = []
-            for path in app_icon_png_paths():
-                try:
-                    photos.append(tk.PhotoImage(file=str(path)))
-                except tk.TclError:
-                    continue
-            self._icon_photos = photos
-        if photos:
-            try:
-                win.iconphoto(True, *photos)
-            except tk.TclError:
-                try:
-                    win.iconphoto(False, photos[-1])
-                except tk.TclError:
-                    pass
-        ico = app_icon_ico_path()
-        if ico is not None and sys.platform == "win32":
-            try:
-                win.iconbitmap(default=str(ico))
-            except tk.TclError:
-                try:
-                    win.iconbitmap(str(ico))
-                except tk.TclError:
-                    pass
+        photos = getattr(self, "_icon_photos", None) or None
+        loaded = apply_window_icon(win, photos=photos, default=default)
+        self._icon_photos = loaded
 
     def _init_fonts(self):
         """Segoe UI on Windows; a close sans-serif if that face is missing."""
@@ -1029,7 +993,7 @@ class SerialPortApp:
         ).pack(anchor="w", pady=(0, UI_GAP))
 
         self.settings_port_var = tk.StringVar(value=NO_PORTS_LABEL)
-        self.settings_baud_var = tk.StringVar(value="115.2K")
+        self.settings_baud_var = tk.StringVar(value=format_baud_label(115200))
         self.settings_device_var = tk.StringVar(value="")
         self.settings_summary_var = tk.StringVar(value="")
         self.settings_parity_var = tk.StringVar(value=DEFAULT_PARITY)
@@ -1066,24 +1030,28 @@ class SerialPortApp:
         baud_col = tk.Frame(box1, bg=white)
         baud_col.grid(row=0, column=1, sticky="nw", padx=(UI_GROUP_GAP, 0))
         self._field_label(baud_col, "Baud", white).pack(anchor="w")
+        baud_width = max(
+            BAUD_COMBO_CHARS,
+            self._chars_for_text(BAUD_COMBO_SAMPLE, extra_px=18),
+        )
         baud_wrap, self.settings_baud_combo = self._outlined_combo(
             baud_col,
             self.settings_baud_var,
             self._baud_labels_for_device(None),
-            BAUD_COMBO_CHARS,
+            baud_width,
             editable=True,
         )
         baud_wrap.pack(anchor="w")
         self._baud_combo_wrap = baud_wrap
         self._trade_port_for_baud_width(port_wrap, self.settings_port_combo, baud_wrap)
         self.settings_baud_combo.bind(
-            "<<ComboboxSelected>>", lambda _e: self._mark_port_status_unknown()
+            "<<ComboboxSelected>>", lambda _e: self._on_baud_selected()
         )
 
         settings_col = tk.Frame(box1, bg=white)
         settings_col.grid(row=0, column=2, sticky="nw", padx=(UI_GROUP_GAP, 0))
         self._field_label(settings_col, "Settings", white).pack(anchor="w")
-        settings_width = self._chars_for_text(longest_settings_text(), extra_px=8)
+        settings_width = self._settings_field_chars()
         settings_wrap, self.settings_summary = self._outlined_entry(
             settings_col, self.settings_summary_var, settings_width
         )
@@ -1140,6 +1108,9 @@ class SerialPortApp:
             self.settings_flow_var.get(),
         )
 
+    def _on_baud_selected(self):
+        self._mark_port_status_unknown()
+
     def _char_width_for_text(self, text, font, extra_px=None):
         """Tk width= chars so `text` plus padding still fits."""
         if extra_px is None:
@@ -1148,11 +1119,16 @@ class SerialPortApp:
         need = font.measure(str(text)) + extra_px
         return max(4, (need + avg - 1) // avg)
 
+    def _settings_field_chars(self):
+        """Char width for `8 - N - 1 - N`. Spaces measure thin, so also use len()."""
+        longest = longest_settings_text()
+        return max(len(longest), self._chars_for_text(longest, extra_px=8))
+
     def _size_settings_summary(self):
         field = getattr(self, "settings_summary", None)
         if field is None:
             return
-        field.configure(width=self._chars_for_text(longest_settings_text(), extra_px=8))
+        field.configure(width=self._settings_field_chars())
         self._lock_control_size(field.master, field)
 
     def _widget_font(self, widget):
@@ -1581,7 +1557,7 @@ class SerialPortApp:
 
     def _store_bottom_port_status(self, port, kind=PORT_STATUS_KIND_SELECTED, **fields):
         record = {"kind": kind}
-        for key in ("baud", "data_bits", "parity", "stop_bits"):
+        for key in ("baud", "data_bits", "parity", "stop_bits", "flow_control"):
             if key in fields:
                 record[key] = fields[key]
         if port:
@@ -1696,13 +1672,7 @@ class SerialPortApp:
         self._refresh_baud_dropdown(apply_default=False)
 
     def _parse_baud(self, text):
-        raw = (text or "").strip().upper().replace(" ", "")
-        for value, label in BAUD_SHORT:
-            if raw == label.upper() or raw == str(value):
-                return value
-        if raw.endswith("K"):
-            return int(float(raw[:-1]) * 1000)
-        return int(float(raw))
+        return parse_baud(text)
 
     def _serial_settings_from_ui(self):
         flow = self.settings_flow_var.get()
@@ -1845,10 +1815,8 @@ class SerialPortApp:
             self._store_bottom_port_status(port, PORT_STATUS_KIND_FAILED)
             return
         settings = self._serial_settings_from_ui()
-        self._log(
-            f"Opened {port} @ {settings['baudrate']} "
-            f"{self._format_settings_summary()}"
-        )
+        baud_text = format_baud_label(settings["baudrate"]) or str(settings["baudrate"])
+        self._log(f"Opened {port} @ {baud_text} {self._format_settings_summary()}")
         # Status only. Keep any Identified device name / Device Status as-is.
         self._set_port_row(port, status="Open", keep_device=True)
         self._store_bottom_port_status(
@@ -2225,7 +2193,7 @@ class SerialPortApp:
             field_cells.append((label, cell))
         self._settings_dialog_fields = field_cells
 
-        preview_width = self._chars_for_text(longest_settings_text(), extra_px=8)
+        preview_width = self._settings_field_chars()
 
         select_row = tk.Frame(white, bg="#FFFFFF")
         select_row.grid(row=2, column=0, columnspan=2, sticky="ew")
@@ -3084,6 +3052,7 @@ class SerialPortApp:
 
 
 if __name__ == "__main__":
+    set_windows_app_user_model_id()
     root = tk.Tk()
     app = SerialPortApp(root)
     root.mainloop()

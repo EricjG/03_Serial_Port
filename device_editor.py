@@ -4,6 +4,7 @@ import tkinter.font as tkfont
 import json
 import os
 
+from app_icon import apply_window_icon, set_windows_app_user_model_id
 from device_data import controllers_field_text, parse_controllers_text
 
 # Theme - Serial Port Apps (Iris): this field only.
@@ -20,7 +21,8 @@ class DeviceEditorApp:
         self.root = root
         self.root.title("Serial Port Device Editor")
         self.root.geometry("480x600")
-        self.root.iconbitmap("1871658-200.png")  # todo: Need to find a ICO file in order for this to work.
+        set_windows_app_user_model_id()
+        self._icon_photos = apply_window_icon(self.root, default=True)
         self.json_file = json_file
         self._init_fonts()
 
@@ -349,6 +351,7 @@ class DeviceEditorApp:
             messagebox.showinfo("Success", "Device deleted successfully.")
 
 if __name__ == "__main__":
+    set_windows_app_user_model_id()
     root = tk.Tk()
     app = DeviceEditorApp(root, "devices.json")
     root.mainloop()

@@ -1,4 +1,4 @@
-"""Live Tk: Baud 1.5x vs Port trade, Settings 8N1 - No Flow, dialog order."""
+"""Live Tk: Baud 1.5x vs Port trade, Settings 8 - N - 1 - N, dialog order."""
 
 from __future__ import annotations
 
@@ -57,8 +57,8 @@ _PROBE = textwrap.dedent(
         failures.append(f"Port did not shrink: {port_w} >= base {base_port}")
 
     summary = app.settings_summary_var.get()
-    if summary != "8N1 - No Flow":
-        failures.append(f"Settings default {summary!r} != '8N1 - No Flow'")
+    if summary != "8 - N - 1 - N":
+        failures.append(f"Settings default {summary!r} != '8 - N - 1 - N'")
     longest = longest_settings_text()
     field = app.settings_summary
     probe = tk.Entry(
@@ -96,10 +96,10 @@ _PROBE = textwrap.dedent(
                 f"{label} at grid ({got_row},{got_col}), want ({row},{col})"
             )
     preview = getattr(app, "_settings_preview_var", None)
-    if preview is None or preview.get() != "8N1 - No Flow":
+    if preview is None or preview.get() != "8 - N - 1 - N":
         failures.append(
             f"dialog preview {None if preview is None else preview.get()!r} "
-            "!= '8N1 - No Flow'"
+            "!= '8 - N - 1 - N'"
         )
     if preview is not None:
         import tkinter.ttk as ttk
@@ -128,7 +128,7 @@ _PROBE = textwrap.dedent(
                 failures.append(
                     f"live preview after Even {preview.get()!r} != {want_preview!r}"
                 )
-            if want_preview != "8E1 - No Flow":
+            if want_preview != "8 - E - 1 - N":
                 failures.append(f"helper produced {want_preview!r}")
     win.destroy()
     root.destroy()

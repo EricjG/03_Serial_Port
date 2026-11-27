@@ -473,10 +473,10 @@ class RegexAndDeviceColumnTests(unittest.TestCase):
 class IdBaudColumnTests(unittest.TestCase):
     def test_identified_shows_short_baud_not_vendor_id(self):
         app = _bare_app()
-        self.assertEqual(app._id_baud_column("Identified", "4292", 460800), "460.8K")
-        self.assertEqual(app._id_baud_column("Open", "4292", 460800), "460.8K")
-        self.assertEqual(app._id_baud_column("Identified", "1027", 115200), "115.2K")
-        self.assertEqual(app._id_baud_column("Identified", "1234", 9600), "9.6K")
+        self.assertEqual(app._id_baud_column("Identified", "4292", 460800), "460,800")
+        self.assertEqual(app._id_baud_column("Open", "4292", 460800), "460,800")
+        self.assertEqual(app._id_baud_column("Identified", "1027", 115200), "115,200")
+        self.assertEqual(app._id_baud_column("Identified", "1234", 9600), "9,600")
 
     def test_unidentified_shows_vendor_id(self):
         app = _bare_app()
@@ -487,8 +487,17 @@ class IdBaudColumnTests(unittest.TestCase):
 
     def test_format_baud_known_and_unknown_values(self):
         self.assertIsNone(SerialPortApp.format_baud(None))
-        self.assertEqual(SerialPortApp.format_baud(115200), "115.2K")
+        self.assertEqual(SerialPortApp.format_baud(115200), "115,200")
         self.assertEqual(SerialPortApp.format_baud(42), "42")
+        self.assertEqual(SerialPortApp.format_baud("9,600"), "9,600")
+        self.assertEqual(SerialPortApp.format_baud(1000000), "1,000,000")
+
+    def test_parse_baud_strips_commas(self):
+        app = _bare_app()
+        self.assertEqual(app._parse_baud("115,200"), 115200)
+        self.assertEqual(app._parse_baud("1,000,000"), 1000000)
+        self.assertEqual(app._parse_baud("115.2K"), 115200)
+        self.assertEqual(app._parse_baud("300"), 300)
 
 
 class IdentifyWithMockSerialTests(FakeSerialTests):
@@ -1138,8 +1147,8 @@ class BaudDropdownTests(unittest.TestCase):
         self.assertEqual(app._baud_labels_for_device(_device_by_model("MB607")), standard)
         self.assertEqual(standard[0], "300")
         self.assertNotIn("600", standard)
-        self.assertIn("115.2K", standard)
-        self.assertIn("921.6K", standard)
+        self.assertIn("115,200", standard)
+        self.assertIn("921,600", standard)
 
     def test_missing_devices_file_keeps_error_on_device_line(self):
         app = _bare_app()
@@ -1163,14 +1172,14 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._selected_device_key = ("SIMCom", "SIM7080")
         app._identified_device_by_port = {}
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app.device_definitions = {"devices": [mb607]}
         app.serial_ports = {"serial_ports": []}
         app.devices_info = {"devices": []}
         app.port_data = [("Open", "COM3", "0x0403:0x6001", None, "FTDI", None)]
         app._port_bottom_status_by_port = {"COM3": "Opened"}
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM3"
         app.settings_baud_var = MagicMock()
@@ -1203,7 +1212,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app = _bare_app()
         mb607 = _device_by_model("MB607")
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app.device_definitions = {"devices": [mb607]}
         app.serial_ports = {"serial_ports": []}
         app.devices_info, error = load_devices_info_file(str(ROOT / "devices_info.json"))
@@ -1222,7 +1231,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._identify_fail_count = 0
         app._identify_fail_key = ("MUX Wiring", "MB607")
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM3"
         app.port_status_var = MagicMock()
@@ -1245,10 +1254,10 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         self.assertNotEqual(column, DEVICE_STATUS_UNIDENTIFIED)
         self.assertNotEqual(column, "Revision 1.23 01/15/24")
 
-        app.settings_device_var.get.return_value = "SIMCom  SIM7080  115.2K Baud"
+        app.settings_device_var.get.return_value = "SIMCom  SIM7080  115,200 Baud"
         app._device_entries = [
-            ("MUX Wiring  MB607  460.8K Baud", mb607),
-            ("SIMCom  SIM7080  115.2K Baud", _device_by_model("SIM7080")),
+            ("MUX Wiring  MB607  460,800 Baud", mb607),
+            ("SIMCom  SIM7080  115,200 Baud", _device_by_model("SIM7080")),
         ]
         app._refresh_identified_device_message()
         app.device_status_var.set.assert_called_with(DEVICE_STATUS_UNIDENTIFIED)
@@ -1283,15 +1292,15 @@ class DevicePickAndHandoffTests(unittest.TestCase):
                 "stopbits": 1,
             }
         )
-        app._format_settings_summary = MagicMock(return_value="8N1 - No Flow")
+        app._format_settings_summary = MagicMock(return_value="8 - N - 1 - N")
         app._log = MagicMock()
         app.update_ports_from_data = MagicMock()
         app._sync_port_selection_ui = MagicMock()
         app._store_bottom_port_status = MagicMock()
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.device_status_var = MagicMock()
         app.port_status_var = MagicMock()
         app.device_message_var = app.device_status_var
@@ -1322,7 +1331,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
     def test_port_status_click_identify_open_and_fail_text(self):
         app = _bare_app()
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", _device_by_model("MB607"))]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", _device_by_model("MB607"))]
         app._port_bottom_status_by_port = {}
         app.port_status_var = MagicMock()
         app.device_status_var = MagicMock()
@@ -1341,9 +1350,9 @@ class DevicePickAndHandoffTests(unittest.TestCase):
             parity="N",
             stop_bits=1,
         )
-        app.port_status_var.set.assert_called_with("COM8 115.2K 8N1")
+        app.port_status_var.set.assert_called_with("COM8   115,200   8 - N - 1 - N")
         app._show_bottom_port_status("COM8")
-        app.port_status_var.set.assert_called_with("COM8 115.2K 8N1")
+        app.port_status_var.set.assert_called_with("COM8   115,200   8 - N - 1 - N")
 
         app._store_bottom_port_status(
             "COM8",
@@ -1353,7 +1362,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
             parity="N",
             stop_bits=1,
         )
-        app.port_status_var.set.assert_called_with("COM8 460.8K 8N1")
+        app.port_status_var.set.assert_called_with("COM8   460,800   8 - N - 1 - N")
 
         app._store_bottom_port_status("COM8", "failed")
         app.port_status_var.set.assert_called_with("COM8 - Failed to open")
@@ -1371,9 +1380,9 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._selected_device_key = None
         app._identified_device_by_port = {}
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM3"
         app.settings_baud_var = MagicMock()
@@ -1408,9 +1417,9 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app._selected_device_key = None
         app._identified_device_by_port = {}
         app._devices_load_error = None
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM3"
         app.settings_baud_var = MagicMock()
@@ -1444,7 +1453,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         self.assertIsNone(uart_error)
         self.assertIsNone(info_error)
         app.device_definitions = {"devices": [mb607]}
-        app._device_entries = [("MUX Wiring  MB607  460.8K Baud", mb607)]
+        app._device_entries = [("MUX Wiring  MB607  460,800 Baud", mb607)]
         app._identified_device_by_port = {"COM3": mb607}
         app._identify_fail_count = 0
         app._identify_fail_key = ("MUX Wiring", "MB607")
@@ -1458,11 +1467,11 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         app.settings_port_var = MagicMock()
         app.settings_port_var.get.return_value = "COM3"
         app.settings_device_var = MagicMock()
-        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460.8K Baud"
+        app.settings_device_var.get.return_value = "MUX Wiring  MB607  460,800 Baud"
         app.settings_baud_var = MagicMock()
-        app.settings_baud_var.get.return_value = "115.2K"
+        app.settings_baud_var.get.return_value = "115,200"
         app.settings_summary_var = MagicMock()
-        app.settings_summary_var.get.return_value = "8N1 - No Flow"
+        app.settings_summary_var.get.return_value = "8 - N - 1 - N"
         app.settings_data_var = MagicMock()
         app.settings_data_var.get.return_value = "8"
         app.settings_stop_var = MagicMock()
@@ -1571,11 +1580,11 @@ class DevicePickAndHandoffTests(unittest.TestCase):
         chip = {"serial_parameters": {"baud_rates": [9600, 115200, 460800]}}
         self.assertEqual(
             app._baud_labels_for_device(device, uart_ic=chip),
-            ["9.6K", "115.2K", "460.8K"],
+            ["9,600", "115,200", "460,800"],
         )
         self.assertEqual(
             app._baud_labels_for_device(None, uart_ic=chip),
-            ["9.6K", "115.2K", "460.8K"],
+            ["9,600", "115,200", "460,800"],
         )
         self.assertEqual(
             app._baud_labels_for_device(device, uart_ic=None),
@@ -1602,7 +1611,7 @@ class DevicePickAndHandoffTests(unittest.TestCase):
 
         expected = _standard_baud_labels()
         self.assertEqual(combo["values"], expected)
-        baud_var.set.assert_called_with("460.8K")
+        baud_var.set.assert_called_with("460,800")
         app._log.assert_not_called()
 
     def test_refresh_keeps_chip_list_and_logs_when_device_baud_is_missing(self):
