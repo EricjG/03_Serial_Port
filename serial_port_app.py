@@ -60,8 +60,11 @@ from picker_logic import (
     bottom_port_status_fields_from_serial_settings,
     bottom_port_status_text,
     check_button_char_width,
+    count_in_use_ports,
     device_identity_key,
     dropdown_ports,
+    in_use_button_size_text,
+    in_use_button_text,
     exit_handoff_payload,
     format_baud_label,
     format_serial_frame,
@@ -866,7 +869,17 @@ class SerialPortApp:
         except tk.TclError:
             pass
 
-    def _build_check_button(self, parent, label, var, on_toggle, on_button, bg=None, padx=(0, 0)):
+    def _build_check_button(
+        self,
+        parent,
+        label,
+        var,
+        on_toggle,
+        on_button,
+        bg=None,
+        padx=(0, 0),
+        size_label=None,
+    ):
         """Checkbox on the button's left edge; label fully to the right of it."""
         cell_bg = bg if bg is not None else UI_PANEL
         cell = tk.Frame(parent, bg=cell_bg)
@@ -890,15 +903,16 @@ class SerialPortApp:
             checkbox_px = max(int(cb.winfo_reqwidth()), 1)
         except tk.TclError:
             checkbox_px = 16
+        measure_text = size_label if size_label is not None else label
         width_chars = check_button_char_width(
-            btn_font.measure(label),
+            btn_font.measure(measure_text),
             checkbox_px,
             gap_px,
             avg_char,
         )
         inner_w = max(
             width_chars * avg_char + 8,
-            checkbox_px + btn_font.measure(label) + 16,
+            checkbox_px + btn_font.measure(measure_text) + 16,
         )
         btn = tk.Button(
             wrap,
@@ -938,6 +952,7 @@ class SerialPortApp:
 
         _place_checkbox()
         self.root.after(1, _place_checkbox)
+        return btn
 
     def _build_status_header(self, parent):
         """Automated title left; checkbox-on-button controls right-aligned, 16px apart."""
@@ -953,15 +968,17 @@ class SerialPortApp:
         trio = tk.Frame(parent, bg=UI_HEADER)
         # Align with Open/Identify: white-box outline + inner pad.
         trio.pack(side=tk.RIGHT, padx=(0, 1 + UI_PAD))
-        self._build_check_button(
+        self._in_use_header_btn = self._build_check_button(
             trio,
-            "In Use",
+            in_use_button_text(0),
             self.show_in_use_var,
             self.toggle_ports_in_use,
             self.on_in_use_button,
             bg=UI_HEADER,
             padx=(0, UI_GROUP_GAP),
+            size_label=in_use_button_size_text(),
         )
+        self._in_use_header_wrap = self._in_use_header_btn.master
         self._build_check_button(
             trio,
             "Scan Ports",
@@ -1485,6 +1502,18 @@ class SerialPortApp:
 
     def _include_in_use_ports(self):
         return bool(self.show_in_use_var.get())
+
+    def _refresh_in_use_button_label(self):
+        """Header In Use count comes from the full port list, not visible rows."""
+        btn = getattr(self, "_in_use_header_btn", None)
+        if btn is None:
+            return
+        text = in_use_button_text(count_in_use_ports(self.port_data))
+        try:
+            if str(btn.cget("text")) != text:
+                btn.configure(text=text)
+        except tk.TclError:
+            pass
 
     def _set_combo_enabled(self, combo, enabled, editable=False):
         if combo is None:
@@ -2621,6 +2650,7 @@ class SerialPortApp:
             return False
 
     def update_ports_from_data(self):
+        self._refresh_in_use_button_label()
         selected = self._selected_port()
         extra = (selected, self._held_port)
         self.tree.delete(*self.tree.get_children())

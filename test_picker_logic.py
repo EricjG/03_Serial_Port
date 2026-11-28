@@ -39,6 +39,10 @@ from picker_logic import (
     dropdown_ports,
     english_ordinal,
     exit_handoff_payload,
+    count_in_use_ports,
+    in_use_button_size_text,
+    in_use_button_text,
+    IN_USE_BUTTON_WIDTH_COUNT,
     grid_ceil_px,
     longest_device_status_text,
     longest_port_status_text,
@@ -542,6 +546,71 @@ class AutoRepeatAndPortListTests(unittest.TestCase):
         self.assertEqual([row[1] for row in visible], ["COM4", "COM2", "COM10"])
         visible_all = visible_tree_rows(rows, include_in_use=True)
         self.assertEqual([row[1] for row in visible_all], ["COM4", "COM2", "COM10", "COM5"])
+
+
+class InUseButtonCountTests(unittest.TestCase):
+    rows = (
+        ("Available", "COM10", "id"),
+        ("In Use", "COM5", "id"),
+        ("In Use", "COM7", "id"),
+        ("In Use", "COM8", "id"),
+        ("Identified", "COM2", "id"),
+        ("Open", "COM4", "id"),
+    )
+
+    def test_label_is_in_use_x_then_digits_no_space(self):
+        self.assertEqual(in_use_button_text(0), "In Use x0")
+        self.assertEqual(in_use_button_text(3), "In Use x3")
+        self.assertEqual(in_use_button_text(12), "In Use x12")
+        self.assertEqual(in_use_button_text(99), "In Use x99")
+        self.assertNotIn("x ", in_use_button_text(3))
+        self.assertNotIn("x ", in_use_button_text(12))
+
+    def test_invalid_or_negative_count_is_x0(self):
+        self.assertEqual(in_use_button_text(None), "In Use x0")
+        self.assertEqual(in_use_button_text(""), "In Use x0")
+        self.assertEqual(in_use_button_text("nope"), "In Use x0")
+        self.assertEqual(in_use_button_text(-1), "In Use x0")
+
+    def test_count_uses_full_list_not_visible_rows(self):
+        self.assertEqual(count_in_use_ports(self.rows), 3)
+        self.assertEqual(count_in_use_ports([]), 0)
+        self.assertEqual(count_in_use_ports(None), 0)
+        hidden = visible_tree_rows(self.rows, include_in_use=False)
+        self.assertEqual([row[0] for row in hidden].count("In Use"), 0)
+        self.assertEqual(
+            count_in_use_ports(self.rows),
+            count_in_use_ports(visible_tree_rows(self.rows, include_in_use=True)),
+        )
+        self.assertNotEqual(count_in_use_ports(self.rows), count_in_use_ports(hidden))
+
+    def test_count_ignores_open_available_identified(self):
+        rows = (
+            ("Available", "COM1"),
+            ("Open", "COM2"),
+            ("Identified", "COM3"),
+        )
+        self.assertEqual(count_in_use_ports(rows), 0)
+        self.assertEqual(in_use_button_text(count_in_use_ports(rows)), "In Use x0")
+
+    def test_size_text_covers_two_digit_counts(self):
+        self.assertEqual(IN_USE_BUTTON_WIDTH_COUNT, 99)
+        self.assertEqual(in_use_button_size_text(), "In Use x99")
+        self.assertGreaterEqual(
+            len(in_use_button_size_text()), len(in_use_button_text(0))
+        )
+        self.assertGreaterEqual(
+            len(in_use_button_size_text()), len(in_use_button_text(12))
+        )
+        avg = 7
+        sized = check_button_char_width(
+            len(in_use_button_size_text()) * avg, 26, 4, avg
+        )
+        for count in (0, 3, 12, 99):
+            need = check_button_char_width(
+                len(in_use_button_text(count)) * avg, 26, 4, avg
+            )
+            self.assertGreaterEqual(sized, need)
 
 
 class CheckButtonWidthTests(unittest.TestCase):
