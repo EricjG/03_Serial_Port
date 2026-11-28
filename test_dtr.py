@@ -1,6 +1,11 @@
 """DTR idle-high open helper and TEMP Reset (DTR) pulse (no hardware)."""
 
+import os
+import subprocess
+import sys
+import textwrap
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from test_device_identity import (
@@ -259,6 +264,101 @@ class TempDtrResetPulseTests(FakeSerialTests):
         app.settings_port_var.set("COM8")
         SerialPortApp._sync_temp_dtr_reset_button(app)
         app._set_button_enabled.assert_called_with(app._temp_dtr_reset_button, True)
+
+
+ROOT = Path(__file__).resolve().parent
+
+_LAYOUT_PROBE = textwrap.dedent(
+    r"""
+    import sys
+    import tkinter as tk
+    from serial_port_app import SerialPortApp, TEMP_DTR_RESET_BUTTON
+
+    SerialPortApp.start_initial_scan = lambda self: None
+    root = tk.Tk()
+    root.withdraw()
+    app = SerialPortApp(root)
+    root.update_idletasks()
+    root.deiconify()
+    root.update()
+    failures = []
+
+    if not TEMP_DTR_RESET_BUTTON:
+        failures.append("TEMP_DTR_RESET_BUTTON is off")
+    reset = getattr(app, "_temp_dtr_reset_button", None)
+    reset_wrap = getattr(app, "_temp_dtr_reset_wrap", None)
+    open_btn = getattr(app, "open_port_button", None)
+    open_wrap = getattr(app, "_open_wrap", None)
+    in_use = getattr(app, "_in_use_header_btn", None)
+    in_use_wrap = getattr(app, "_in_use_header_wrap", None)
+    identify = getattr(app, "identify_button", None)
+    if reset is None or reset_wrap is None:
+        failures.append("Reset (DTR) button missing")
+    if open_btn is None or open_wrap is None:
+        failures.append("Open button missing")
+    if in_use is None or in_use_wrap is None:
+        failures.append("In Use header button missing")
+    if reset is not None and str(reset.cget("text")) != "Reset (DTR)":
+        failures.append(f"Reset label {reset.cget('text')!r}")
+    if in_use is not None and str(in_use.cget("text")) != "In Use x0":
+        failures.append(f"In Use label {in_use.cget('text')!r} != 'In Use x0'")
+    if reset_wrap is not None and open_wrap is not None:
+        rx = int(reset_wrap.winfo_rootx())
+        ox = int(open_wrap.winfo_rootx())
+        rw = int(reset_wrap.winfo_width())
+        if rx + rw > ox:
+            failures.append(f"Reset overlaps Open: reset={rx}+{rw} open={ox}")
+        if rx >= ox:
+            failures.append(f"Reset not left of Open: reset={rx} open={ox}")
+    if in_use_wrap is not None and reset_wrap is not None:
+        iy = int(in_use_wrap.winfo_rooty())
+        ry = int(reset_wrap.winfo_rooty())
+        if abs(iy - ry) < 8:
+            failures.append(f"In Use and Reset share a row: in_use_y={iy} reset_y={ry}")
+    if open_wrap is not None and identify is not None:
+        identify_wrap = identify.master
+        ox2 = int(open_wrap.winfo_rootx()) + int(open_wrap.winfo_width())
+        ix2 = int(identify_wrap.winfo_rootx()) + int(identify_wrap.winfo_width())
+        if abs(ox2 - ix2) > 2:
+            failures.append(f"Open/Identify right edges {ox2} vs {ix2}")
+    if reset is not None and str(reset.cget("state")) != str(tk.DISABLED):
+        failures.append(f"Reset should start disabled, got {reset.cget('state')!r}")
+
+    root.destroy()
+    if failures:
+        sys.stderr.write("\n".join(failures) + "\n")
+        raise SystemExit(1)
+    """
+)
+
+
+def _tk_available():
+    probe = "import tkinter as tk; r = tk.Tk(); r.destroy()"
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        env=os.environ.copy(),
+    )
+    return result.returncode == 0
+
+
+class TempDtrResetLayoutTests(unittest.TestCase):
+    @unittest.skipUnless(_tk_available(), "Tk display required (use xvfb-run on Linux)")
+    def test_reset_sits_left_of_open_and_leaves_in_use_header(self):
+        result = subprocess.run(
+            [sys.executable, "-c", _LAYOUT_PROBE],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=result.stderr or result.stdout or "DTR/In Use layout probe failed",
+        )
 
 
 if __name__ == "__main__":

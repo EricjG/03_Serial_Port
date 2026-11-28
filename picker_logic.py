@@ -1031,6 +1031,37 @@ def apply_header_button_click(in_use, scan_ports, scan_devices, button):
     return bool(in_use), False, False
 
 
+IN_USE_BUTTON_BASE = "In Use"
+IN_USE_BUTTON_WIDTH_COUNT = 99  # size the header button for two-digit counts
+
+
+def count_in_use_ports(rows):
+    """In Use rows in the full port list, ignoring the view filter."""
+    count = 0
+    for row in rows or ():
+        if not row:
+            continue
+        if row[0] == STATUS_IN_USE:
+            count += 1
+    return count
+
+
+def in_use_button_text(count):
+    """Header In Use button: `In Use x0`, `In Use x3` (no space after x)."""
+    try:
+        n = int(count)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 0:
+        n = 0
+    return f"{IN_USE_BUTTON_BASE} x{n}"
+
+
+def in_use_button_size_text():
+    """Longest header In Use label used to keep the button width fixed."""
+    return in_use_button_text(IN_USE_BUTTON_WIDTH_COUNT)
+
+
 CHECK_BUTTON_PAD_PX = 4  # extra pixels past the measured checkbox
 
 
