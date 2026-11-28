@@ -33,22 +33,21 @@ from device_data import (
     device_matches_ids,
     devices_info_list,
     format_device_column,
-    format_sent_message,
     identified_connected_label,
     initialize_expect,
+    initialize_steps,
     load_device_file,
     load_devices_info_file,
     load_serial_ports_file,
     match_device_info,
     match_uart_ic,
-    matched_text,
     migrate_device,
     parse_usb_id,
+    run_initialize_sequence,
     run_reset_sequence,
     scan_controller_ids,
     uart_ic_label,
     uart_ic_list,
-    wait_for_text,
 )
 from picker_logic import (
     DEFAULT_PARITY,
@@ -2023,10 +2022,10 @@ class SerialPortApp:
     def _probe_match(self, ser, device):
         """Return (regex match or None, reply text, error or None).
 
-        Optional per-device reset (pulse + wait_for) and initialize expect
-        run before the existing initialize/identify writes. Timeouts are an
-        identify failure for this baud, not a Tk-blocking wait: this method
-        is only called from worker threads (same as pause_ms sleeps).
+        Optional per-device reset (pulse + wait_for / wait_for_regex) and
+        initialize steps/expect run before the existing identify write.
+        Timeouts are an identify failure for this baud, not a Tk-blocking
+        wait: this method is only called from worker threads.
         """
         migrated, error = migrate_device(device)
         if error or migrated is None:
@@ -2040,21 +2039,12 @@ class SerialPortApp:
         )
         if not ok:
             return None, received, fail
-        expect, expect_timeout_ms = initialize_expect(migrated)
-        if expect:
-            init_steps = command_steps(migrated, keys=("initialize",))
-            if init_steps:
-                message, _pause_s = init_steps[0]
-                ser.write(str(message).encode())
-                self._step_log(f"{port} - Sent: {format_sent_message(message)}")
-            found, received = wait_for_text(
-                ser, expect, expect_timeout_ms, sleep=time.sleep
+        if initialize_steps(migrated) or initialize_expect(migrated)[0]:
+            ok, received, fail = run_initialize_sequence(
+                ser, migrated, port=port, log=self._step_log, sleep=time.sleep
             )
-            if not found:
-                fail = f"timeout waiting for {expect!r}"
-                self._step_log(f"{port} - Timeout waiting for {expect!r}")
+            if not ok:
                 return None, received, fail
-            self._step_log(f"{port} - Received: {matched_text(received, expect)}")
             steps = command_steps(migrated, keys=("identify",))
         else:
             steps = command_steps(migrated)

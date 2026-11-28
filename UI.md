@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.17 — Per-device reset sequence on Identify; TEMP Reset (DTR) button removed (Nov 28, 2026).
+Version: 3.18 — Timed initialize.steps + optional wait_for_regex; MB607 enter-command-mode sequence (Nov 28, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -66,7 +66,8 @@ Version: 3.17 — Per-device reset sequence on Identify; TEMP Reset (DTR) button
   - `Close` when this app has it open (click closes it)
   - Grayed `In Use` when another program holds the port
 - Every app open (manual Open, scan/identify, availability probe) goes through `open_serial_idle_dtr`: construct closed, `dtr=False`, `open()`, `dtr=False` again so DTR idles HIGH. pyserial polarity: `ser.dtr = True` / `ser.rts = True` drives the adapter TTL pin LOW; False is HIGH. RTS is not changed on open. Some drivers/OSes still pulse DTR on open; the line is undriven while no port is open.
-- **Identify** / Scan Devices: if that device’s `commands.reset` is present, the worker thread (same as today’s pause_ms sleeps — the Tk main loop is not blocked extra) pulses the configured line, waits for `wait_for`, sends initialize (and waits for `expect` when set), then runs the existing identify command + regex. Logs e.g. `COM8 - DTR reset pulse 100 ms`, `COM8 - Received: Press CR key for command Debug Mode`, `COM8 - Sent: CR CR`, `COM8 - Received: Enter command`. A wait timeout is an identify failure for that baud. Devices without `reset` are unchanged.
+- **Identify** / Scan Devices: if that device’s `commands.reset` is present, the worker thread (same as today’s pause_ms sleeps — the Tk main loop is not blocked extra) pulses the configured line, then waits for `wait_for` (case-insensitive substring of the accumulated RX buffer; extra text around the prompt is fine; a match may span reads) and optional `wait_for_regex`. Then initialize: if `steps` is set, each step is logged (`COM8 - Wait 10 ms`, `COM8 - Sent: CR`, `COM8 - Sent: debug CR`) and `expect` is checked against everything received since those sends; else the old single `message` / `pause_ms` form is used. Then the existing identify command + regex. Logs e.g. `COM8 - DTR reset pulse 100 ms`, `COM8 - Received: Press CR key for command Debug Mode`, `COM8 - Wait 10 ms`, `COM8 - Sent: CR`, `COM8 - Sent: debug CR`, `COM8 - Received: Enter Command`. A wait timeout is an identify failure for that baud. Devices without `reset` / `steps` are unchanged.
+- Device Editor **Reset** includes optional **Wait For Regex**. **Initialize Steps** is a multi-line field, one step per line: `wait 10` or `send debug\r` (`\r` / `\n` are allowed). Blank steps keep the old **Initialize Command** / **Initialize Pause** fields.
 
 ### White box 2
 - One row: **Device** combo stretching across, **Identify** at the right

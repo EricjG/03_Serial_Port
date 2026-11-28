@@ -12,7 +12,10 @@ from device_data import (
     baud_rates_for_picker,
     command_steps,
     connected_device_label,
+    format_init_steps_text,
     initialize_expect,
+    initialize_steps,
+    parse_init_steps_text,
     reset_command,
     ttl_level_to_pyserial,
     controllers_field_text,
@@ -219,10 +222,16 @@ class OnDiskSchemaTests(unittest.TestCase):
             self.assertNotIn("vendor_ids", device)
             self.assertIn("baud_rates", device["serial_parameters"])
             self.assertNotIn("baudrate", device["serial_parameters"])
-            for key in ("initialize", "identify"):
-                command = device["commands"][key]
-                self.assertIn("pause_ms", command)
-                self.assertNotIn("pause", command)
+            identify = device["commands"]["identify"]
+            self.assertIn("pause_ms", identify)
+            self.assertNotIn("pause", identify)
+            init = device["commands"]["initialize"]
+            self.assertNotIn("pause", init)
+            if init.get("steps"):
+                self.assertIsInstance(init["steps"], list)
+                self.assertTrue(init["steps"])
+            else:
+                self.assertIn("pause_ms", init)
             self.assertIsInstance(device.get("type"), str)
             for controller in device["controllers"]:
                 self.assertTrue(str(controller["vid"]).startswith("0x"))
@@ -456,14 +465,35 @@ class DeviceColumnTests(unittest.TestCase):
         self.assertEqual(reset["reset_state"], "Low")
         self.assertEqual(reset["pulse_ms"], 100)
         self.assertEqual(reset["wait_for"], "Press CR key for command Debug Mode")
-        self.assertEqual(reset["timeout_ms"], 3000)
-        self.assertEqual(initialize_expect(mb607), ("Enter command", 3000))
+        self.assertEqual(reset["timeout_ms"], 1000)
+        self.assertNotIn("wait_for_regex", reset)
+        self.assertEqual(initialize_expect(mb607), ("Enter Command", 1000))
+        self.assertEqual(
+            mb607["commands"]["initialize"]["steps"],
+            [
+                {"pause_ms": 10},
+                {"send": "\r"},
+                {"pause_ms": 10},
+                {"send": "debug\r"},
+                {"pause_ms": 10},
+                {"send": "\r"},
+                {"pause_ms": 100},
+            ],
+        )
         sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")
         self.assertIsNone(reset_command(sim))
         self.assertEqual(initialize_expect(sim), (None, 0))
         self.assertEqual(
             command_steps(mb607, keys=("identify",)),
             [("I\r", 1.0)],
+        )
+        self.assertEqual(
+            format_init_steps_text(initialize_steps(mb607)),
+            "wait 10\nsend \\r\nwait 10\nsend debug\\r\nwait 10\nsend \\r\nwait 100",
+        )
+        self.assertEqual(
+            parse_init_steps_text(format_init_steps_text(initialize_steps(mb607))),
+            initialize_steps(mb607),
         )
 
     def test_ttl_level_to_pyserial_high_low(self):
