@@ -102,6 +102,34 @@ NO_PORTS_LABEL = "No Ports Available"
 AUTO_DEVICE_SCAN_MS = 1000  # repeat once a second when the header box is checked
 PORT_OPEN_TIMEOUT = 0.15  # seconds; faster availability probe
 
+# pyserial: ser.dtr = True asserts DTR (this adapter's TTL pin goes LOW);
+# ser.dtr = False deasserts DTR (TTL HIGH). MB607 reset is active-low on DTR,
+# so idle is HIGH. Some drivers/OSes still pulse DTR on open; the line is
+# undriven while no port is open.
+DTR_IDLE = False
+
+# TEMP: DTR reset-pulse test button. One flag to remove: set False, or delete
+# every TEMP_DTR_RESET_* symbol plus _on_temp_dtr_reset / _finish_temp_dtr_reset.
+TEMP_DTR_RESET_BUTTON = True
+DTR_RESET_PULSE_MS = 100
+
+
+def open_serial_idle_dtr(port, **kwargs):
+    """Create and open a Serial with DTR held HIGH (ser.dtr = False).
+
+    Instantiating with a port opens immediately and can glitch DTR low.
+    Build closed, set dtr=False, open(), then set dtr=False again. RTS is
+    not touched here (existing rtscts / default RTS behavior stays as-is).
+    """
+    kwargs = dict(kwargs)
+    kwargs.pop("port", None)
+    ser = serial.Serial(None, **kwargs)
+    ser.port = port
+    ser.dtr = DTR_IDLE
+    ser.open()
+    ser.dtr = DTR_IDLE
+    return ser
+
 # Page-3 look (cleaned Serial Port Application UI)
 UI_BG = "#FFFFFF"  # window / content white
 UI_PANEL = "#FFFFFF"
@@ -291,6 +319,9 @@ class SerialPortApp:
         self._log_lock = threading.Lock()
         self._open_serial = None
         self._held_port = None
+        self._dtr_pulse_busy = False
+        self._dtr_pulse_state = None
+        self._dtr_pulse_after_id = None
         self._suppress_device_apply = False
         self._suppress_auto_toggle = False
         self._device_entries = []
@@ -564,11 +595,11 @@ class SerialPortApp:
         button.pack(fill=tk.BOTH, expand=True)
         return wrap, button
 
-    def _button_column(self, parent, bg, text, command=None):
-        """Label spacer + 96px button so the button lines up with fields below labels."""
+    def _button_column(self, parent, bg, text, command=None, width_px=UI_BTN_W):
+        """Label spacer + button so the button lines up with fields below labels."""
         col = tk.Frame(parent, bg=bg)
         self._field_label(col, " ", bg).pack(anchor="w")
-        wrap, button = self._flat_button(col, text, command=command)
+        wrap, button = self._flat_button(col, text, command=command, width_px=width_px)
         wrap.pack(anchor="e")
         return col, wrap, button
 
@@ -1058,10 +1089,27 @@ class SerialPortApp:
         settings_wrap.pack(anchor="w")
         self.settings_summary.bind("<Button-1>", self._on_settings_field_click)
 
+        open_col_index = 3
+        if TEMP_DTR_RESET_BUTTON:
+            # TEMP: Reset (DTR) sits left of Open so Open/Identify stay right-aligned.
+            reset_label = "Reset (DTR)"
+            reset_w = max(UI_BTN_W, int(self._font_button.measure(reset_label)) + 8)
+            reset_col, self._temp_dtr_reset_wrap, self._temp_dtr_reset_button = (
+                self._button_column(
+                    box1,
+                    white,
+                    reset_label,
+                    command=self._on_temp_dtr_reset,
+                    width_px=reset_w,
+                )
+            )
+            reset_col.grid(row=0, column=3, sticky="ne", padx=(UI_GROUP_GAP, 0))
+            self._temp_dtr_reset_button.configure(state=tk.DISABLED)
+            open_col_index = 4
         open_col, self._open_wrap, self.open_port_button = self._button_column(
             box1, white, "Open", command=self._on_open_port
         )
-        open_col.grid(row=0, column=3, sticky="ne", padx=(UI_GROUP_GAP, 0))
+        open_col.grid(row=0, column=open_col_index, sticky="ne", padx=(UI_GROUP_GAP, 0))
         self.open_port_button.configure(state=tk.DISABLED)
 
         box2 = self._white_box(parent)
@@ -1667,6 +1715,7 @@ class SerialPortApp:
         )
         self._set_button_enabled(getattr(self, "identify_button", None), state["identify"])
         self._set_button_enabled(getattr(self, "select_button", None), state["select"])
+        self._sync_temp_dtr_reset_button(port)
         self._highlight_tree_port(port)
         self._refresh_identified_device_message()
         self._refresh_baud_dropdown(apply_default=False)
@@ -1788,7 +1837,7 @@ class SerialPortApp:
     def _reopen_held(self, port):
         try:
             settings = self._serial_settings_from_ui()
-            self._open_serial = serial.Serial(port, timeout=1, **settings)
+            self._open_serial = open_serial_idle_dtr(port, timeout=1, **settings)
             self._held_port = port
             return True
         except (serial.SerialException, OSError, ValueError) as exc:
@@ -1824,6 +1873,84 @@ class SerialPortApp:
             PORT_STATUS_KIND_OPENED,
             **bottom_port_status_fields_from_serial_settings(settings),
         )
+
+    def _sync_temp_dtr_reset_button(self, port=None):
+        # TEMP: DTR reset pulse test. Remove with TEMP_DTR_RESET_BUTTON.
+        if not TEMP_DTR_RESET_BUTTON:
+            return
+        if port is None:
+            port = self._selected_port()
+        busy = bool(getattr(self, "_dtr_pulse_busy", False))
+        self._set_button_enabled(
+            getattr(self, "_temp_dtr_reset_button", None),
+            bool(port) and not busy,
+        )
+
+    def _on_temp_dtr_reset(self):
+        # TEMP: DTR reset pulse test. Remove with TEMP_DTR_RESET_BUTTON.
+        if not TEMP_DTR_RESET_BUTTON:
+            return
+        if getattr(self, "_dtr_pulse_busy", False):
+            return
+        port = self._selected_port()
+        if not port:
+            return
+        owned = self._open_serial is not None and getattr(self, "_held_port", None) == port
+        close_after = False
+        ser = None
+        try:
+            if owned:
+                ser = self._open_serial
+            else:
+                ser = open_serial_idle_dtr(port, timeout=1)
+                close_after = True
+            ser.dtr = True
+        except (serial.SerialException, OSError, ValueError, AttributeError) as exc:
+            self._log(f"{port} - DTR reset failed: {exc}")
+            if close_after and ser is not None:
+                try:
+                    ser.close()
+                except (serial.SerialException, OSError, AttributeError):
+                    pass
+            return
+        self._dtr_pulse_busy = True
+        self._dtr_pulse_state = {
+            "ser": ser,
+            "port": port,
+            "close_after": close_after,
+        }
+        self._sync_temp_dtr_reset_button(port)
+        after = getattr(self.root, "after", None)
+        if callable(after):
+            self._dtr_pulse_after_id = after(
+                DTR_RESET_PULSE_MS, self._finish_temp_dtr_reset
+            )
+        else:
+            self._finish_temp_dtr_reset()
+
+    def _finish_temp_dtr_reset(self):
+        # TEMP: DTR reset pulse test. Remove with TEMP_DTR_RESET_BUTTON.
+        self._dtr_pulse_after_id = None
+        state = getattr(self, "_dtr_pulse_state", None) or {}
+        self._dtr_pulse_state = None
+        ser = state.get("ser")
+        port = state.get("port") or "?"
+        close_after = bool(state.get("close_after"))
+        try:
+            if ser is not None:
+                ser.dtr = DTR_IDLE
+            if port and port != "?":
+                self._log(f"{port} - DTR reset pulse {DTR_RESET_PULSE_MS} ms")
+        except (serial.SerialException, OSError, ValueError, AttributeError) as exc:
+            self._log(f"{port} - DTR reset failed: {exc}")
+        finally:
+            if close_after and ser is not None:
+                try:
+                    ser.close()
+                except (serial.SerialException, OSError, AttributeError):
+                    pass
+            self._dtr_pulse_busy = False
+            self._sync_temp_dtr_reset_button()
 
     def _apply_connection_scan(self, port, found, settings, was_open, device=None):
         if found:
@@ -2055,7 +2182,7 @@ class SerialPortApp:
                 )
             else:
                 try:
-                    with serial.Serial(port, timeout=2, **settings) as ser:
+                    with open_serial_idle_dtr(port, timeout=2, **settings) as ser:
                         match, reply = self._probe_match(ser, device)
                         if match:
                             found = format_device_column(device, match.groupdict())
@@ -2299,6 +2426,15 @@ class SerialPortApp:
 
     def _shutdown(self):
         self._clear_auto_scans()
+        after_id = getattr(self, "_dtr_pulse_after_id", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+            self._dtr_pulse_after_id = None
+        if getattr(self, "_dtr_pulse_busy", False):
+            self._finish_temp_dtr_reset()
         self._release_serial()
         self.root.destroy()
 
@@ -2614,7 +2750,7 @@ class SerialPortApp:
 
     def is_port_available(self, port_name):
         try:
-            ser = serial.Serial(port_name, timeout=PORT_OPEN_TIMEOUT)
+            ser = open_serial_idle_dtr(port_name, timeout=PORT_OPEN_TIMEOUT)
             ser.close()
             return True
         except (serial.SerialException, OSError):
@@ -2697,7 +2833,7 @@ class SerialPortApp:
                 continue
             for baud in bauds:
                 try:
-                    with serial.Serial(
+                    with open_serial_idle_dtr(
                         port,
                         baudrate=baud,
                         parity=params.get("parity", "N"),
