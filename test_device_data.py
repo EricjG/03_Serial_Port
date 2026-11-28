@@ -455,7 +455,7 @@ class DeviceColumnTests(unittest.TestCase):
         self.assertEqual(reset["run_state"], "High")
         self.assertEqual(reset["reset_state"], "Low")
         self.assertEqual(reset["pulse_ms"], 100)
-        self.assertEqual(reset["wait_for"], "Press CR key for comand Debug Mode")
+        self.assertEqual(reset["wait_for"], "Press CR key for command Debug Mode")
         self.assertEqual(reset["timeout_ms"], 3000)
         self.assertEqual(initialize_expect(mb607), ("Enter command", 3000))
         sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")

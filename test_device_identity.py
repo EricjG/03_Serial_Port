@@ -98,11 +98,11 @@ def _bare_app():
 
 
 MB607_FLASH_REPLY = "Running Flash        REV= 0010, RevP1.01 003/09/24"
-MB607_WAIT_FOR = "Press CR key for comand Debug Mode"
+MB607_WAIT_FOR = "Press CR key for command Debug Mode"
 MB607_EXPECT = "Enter command"
 MB607_PROBE_REPLY = f"{MB607_WAIT_FOR}\r\n{MB607_EXPECT}\r\n{MB607_FLASH_REPLY}"
 MB607_RESET_TIMEOUT = (
-    "DTR reset timeout waiting for 'Press CR key for comand Debug Mode'"
+    "DTR reset timeout waiting for 'Press CR key for command Debug Mode'"
 )
 
 

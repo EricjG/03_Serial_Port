@@ -133,7 +133,7 @@ class ResetSchemaTests(unittest.TestCase):
         self.assertEqual(format_sent_message("\r\r"), "CR CR")
         self.assertEqual(format_sent_message("AT\r"), "AT\\r")
         self.assertEqual(
-            matched_text("xx Press CR key for comand Debug Mode yy", MB607_WAIT_FOR),
+            matched_text("xx Press CR key for command Debug Mode yy", MB607_WAIT_FOR),
             MB607_WAIT_FOR,
         )
 
