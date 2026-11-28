@@ -9,7 +9,9 @@ from device_data import (
     TTL_LEVELS,
     RESET_LINES,
     controllers_field_text,
+    format_init_steps_text,
     parse_controllers_text,
+    parse_init_steps_text,
 )
 
 # Theme - Serial Port Apps (Iris): this field only.
@@ -203,7 +205,7 @@ class DeviceEditorApp:
             )
             combo.pack(fill=tk.X, expand=True, padx=5)
             self.fields[label] = combo
-        for label in ("Pulse (ms)", "Wait For", "Reset Timeout (ms)"):
+        for label in ("Pulse (ms)", "Wait For", "Wait For Regex", "Reset Timeout (ms)"):
             frame = tk.Frame(reset_frame)
             frame.pack(fill=tk.X, pady=2)
             tk.Label(frame, text=label, width=20, anchor="w").pack(side=tk.LEFT)
@@ -226,6 +228,14 @@ class DeviceEditorApp:
             entry = tk.Entry(frame)
             entry.pack(fill=tk.X, expand=True, padx=5)
             self.fields[label] = entry
+        steps_frame = tk.Frame(init_frame)
+        steps_frame.pack(fill=tk.X, pady=2)
+        tk.Label(
+            steps_frame, text="Initialize Steps", width=20, anchor="nw"
+        ).pack(side=tk.LEFT)
+        steps_text = tk.Text(steps_frame, height=8, width=36, wrap=tk.NONE)
+        steps_text.pack(fill=tk.X, expand=True, padx=5)
+        self.fields["Initialize Steps"] = steps_text
 
         # Create a section for Identify commands
         identify_frame = tk.LabelFrame(self.details_frame, text="Identify", padx=10, pady=10)
@@ -295,6 +305,10 @@ class DeviceEditorApp:
             "wait_for": self.fields["Wait For"].get() if "Wait For" in self.fields else "",
             "timeout_ms": _int_field("Reset Timeout (ms)", 0),
         }
+        if "Wait For Regex" in self.fields:
+            regex = (self.fields["Wait For Regex"].get() or "").strip()
+            if regex:
+                device["commands"]["reset"]["wait_for_regex"] = regex
 
     def load_device_details(self, event=None):
         """Load the details of the selected device into the fields."""
@@ -336,6 +350,9 @@ class DeviceEditorApp:
         if "Wait For" in self.fields:
             self.fields["Wait For"].delete(0, tk.END)
             self.fields["Wait For"].insert(0, reset.get("wait_for", ""))
+        if "Wait For Regex" in self.fields:
+            self.fields["Wait For Regex"].delete(0, tk.END)
+            self.fields["Wait For Regex"].insert(0, reset.get("wait_for_regex", ""))
         if "Reset Timeout (ms)" in self.fields:
             self.fields["Reset Timeout (ms)"].delete(0, tk.END)
             timeout = reset.get("timeout_ms", "")
@@ -359,6 +376,14 @@ class DeviceEditorApp:
             self.fields["Initialize Timeout"].insert(
                 0, "" if init_timeout in (None, "") else str(init_timeout)
             )
+        if "Initialize Steps" in self.fields:
+            widget = self.fields["Initialize Steps"]
+            try:
+                widget.delete("1.0", tk.END)
+                widget.insert("1.0", format_init_steps_text(initialize.get("steps")))
+            except tk.TclError:
+                widget.delete(0, tk.END)
+                widget.insert(0, format_init_steps_text(initialize.get("steps")))
         if "Identify Command" in self.fields:
             self.fields["Identify Command"].delete(0, tk.END)
             self.fields["Identify Command"].insert(0, repr(identify.get("message", "")))
@@ -420,6 +445,17 @@ class DeviceEditorApp:
                 device["commands"]["initialize"]["timeout_ms"] = int(timeout_text)
             else:
                 device["commands"]["initialize"].pop("timeout_ms", None)
+        if "Initialize Steps" in self.fields:
+            widget = self.fields["Initialize Steps"]
+            try:
+                steps_text = widget.get("1.0", "end")
+            except TypeError:
+                steps_text = widget.get()
+            steps = parse_init_steps_text(steps_text)
+            if steps:
+                device["commands"]["initialize"]["steps"] = steps
+            else:
+                device["commands"]["initialize"].pop("steps", None)
         if "Identify Command" in self.fields:
             device["commands"]["identify"]["message"] = eval(
                 self.fields["Identify Command"].get()
@@ -491,7 +527,13 @@ class DeviceEditorApp:
             else:
                 self.device_dropdown.set("")
                 for field in self.fields.values():
-                    field.delete(0, tk.END)
+                    try:
+                        field.delete(0, tk.END)
+                    except tk.TclError:
+                        try:
+                            field.delete("1.0", tk.END)
+                        except tk.TclError:
+                            pass
             self.save_devices()
             messagebox.showinfo("Success", "Device deleted successfully.")
 

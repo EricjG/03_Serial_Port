@@ -99,10 +99,25 @@ def _bare_app():
 
 MB607_FLASH_REPLY = "Running Flash        REV= 0010, RevP1.01 003/09/24"
 MB607_WAIT_FOR = "Press CR key for command Debug Mode"
-MB607_EXPECT = "Enter command"
+MB607_EXPECT = "Enter Command"
 MB607_PROBE_REPLY = f"{MB607_WAIT_FOR}\r\n{MB607_EXPECT}\r\n{MB607_FLASH_REPLY}"
+MB607_NOISY_PROBE_REPLY = (
+    f"boot junk\r\n{MB607_WAIT_FOR} !! extra\r\n{MB607_EXPECT}\r\n{MB607_FLASH_REPLY}"
+)
 MB607_RESET_TIMEOUT = (
     "DTR reset timeout waiting for 'Press CR key for command Debug Mode'"
+)
+MB607_INIT_WRITES = [b"\r", b"debug\r", b"\r", b"I\r"]
+MB607_STEPS_TEXT = "\n".join(
+    (
+        "wait 10",
+        "send \\r",
+        "wait 10",
+        "send debug\\r",
+        "wait 10",
+        "send \\r",
+        "wait 100",
+    )
 )
 
 
@@ -560,7 +575,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         label, baud = self._identify("COM5", "4292")
         self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 460800)
-        self.assertEqual(FakeSerial.instances[0].written, [b"\r\r", b"I\r"])
+        self.assertEqual(FakeSerial.instances[0].written, MB607_INIT_WRITES)
 
     def test_sim7080_identify_commands_and_label(self):
         FakeSerial.response = b"SIMCOM_SIM7080"
@@ -1799,11 +1814,13 @@ class DeviceEditorLoadTests(unittest.TestCase):
             "Reset State": MagicMock(),
             "Pulse (ms)": MagicMock(),
             "Wait For": MagicMock(),
+            "Wait For Regex": MagicMock(),
             "Reset Timeout (ms)": MagicMock(),
             "Initialize Command": MagicMock(),
             "Initialize Pause": MagicMock(),
             "Initialize Expect": MagicMock(),
             "Initialize Timeout": MagicMock(),
+            "Initialize Steps": MagicMock(),
             "Identify Command": MagicMock(),
             "Identify Pause": MagicMock(),
             "Response Regex": MagicMock(),
@@ -1816,13 +1833,16 @@ class DeviceEditorLoadTests(unittest.TestCase):
         fields["Reset State"].set.assert_called_with("Low")
         fields["Pulse (ms)"].insert.assert_called_with(0, "100")
         fields["Wait For"].insert.assert_called_with(0, MB607_WAIT_FOR)
-        fields["Reset Timeout (ms)"].insert.assert_called_with(0, "3000")
+        fields["Wait For Regex"].insert.assert_called_with(0, "")
+        fields["Reset Timeout (ms)"].insert.assert_called_with(0, "1000")
         fields["Initialize Expect"].insert.assert_called_with(0, MB607_EXPECT)
-        fields["Initialize Timeout"].insert.assert_called_with(0, "3000")
+        fields["Initialize Timeout"].insert.assert_called_with(0, "1000")
+        fields["Initialize Steps"].insert.assert_called_with("1.0", MB607_STEPS_TEXT)
         editor.device_dropdown.current.return_value = 0  # SIM7080
         editor.load_device_details()
         fields["Reset Line"].set.assert_called_with("")
         fields["Initialize Expect"].insert.assert_called_with(0, "")
+        fields["Initialize Steps"].insert.assert_called_with("1.0", "")
 
     def test_missing_file_or_key_returns_empty_list(self):
         self.assertEqual(
@@ -1885,6 +1905,10 @@ class DeviceEditorLoadTests(unittest.TestCase):
         editor.fields["Pulse (ms)"].get.return_value = ""
         editor.fields["Wait For"] = MagicMock()
         editor.fields["Wait For"].get.return_value = ""
+        editor.fields["Wait For Regex"] = MagicMock()
+        editor.fields["Wait For Regex"].get.return_value = ""
+        editor.fields["Initialize Steps"] = MagicMock()
+        editor.fields["Initialize Steps"].get.return_value = ""
         editor.fields["Reset Timeout (ms)"] = MagicMock()
         editor.fields["Reset Timeout (ms)"].get.return_value = ""
         editor.fields["Response Regex"].get.return_value = ""

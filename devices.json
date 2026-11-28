@@ -64,13 +64,20 @@
           "reset_state": "Low",
           "pulse_ms": 100,
           "wait_for": "Press CR key for command Debug Mode",
-          "timeout_ms": 3000
+          "timeout_ms": 1000
         },
         "initialize": {
-          "message": "\r\r",
-          "pause_ms": 1000,
-          "expect": "Enter command",
-          "timeout_ms": 3000
+          "steps": [
+            {"pause_ms": 10},
+            {"send": "\r"},
+            {"pause_ms": 10},
+            {"send": "debug\r"},
+            {"pause_ms": 10},
+            {"send": "\r"},
+            {"pause_ms": 100}
+          ],
+          "expect": "Enter Command",
+          "timeout_ms": 1000
         },
         "identify": {
           "message": "I\r",

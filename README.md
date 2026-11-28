@@ -94,8 +94,8 @@ Each item under `"devices"` describes how to find one piece of equipment. Old fi
 - `short_description`, `long_description` — notes. The Device dropdown shows `Manufacturer  model  115,200 Baud` (first listed baud). `long_description` is not in that dropdown.
 - `controllers` — USB-serial chips this device may sit behind (one or more `{vid, pid?}` pairs). `vid` / `pid` are hex strings (`"0x10C4"`). Scan Devices and Identify only try that device on ports whose VID matches, and whose PID matches when the controller lists one. If `pid` is omitted on a controller, any product ID from that vendor matches. If `controllers` is missing, empty, null, or has no usable `vid` values, the device is tried on **every** available port. The Device dropdown lists the full catalog (it is not filtered by the open port). The device editor **Port VID:PID** field is comma-separated hex (`0403:6001, 10C4`); PID is optional; `0x` is optional; blank saves `[]`.
 - `serial_parameters.baud_rates` — baud values tried in order (bps) when identifying the device. The picker's Baud **dropdown** is **not** this list; it comes from `serial_ports.json` as described above. Also `data_bits`, `parity` (`None` / `Even` / …), `stop_bits`, `flow_control`.
-- `commands.reset` — optional. If present, Identify/Scan pulses a control line **before** initialize: set `reset_state`, wait `pulse_ms`, return to `run_state`, then read until `wait_for` is seen (case-insensitive substring) or `timeout_ms`. `line` is `DTR` or `RTS`. `run_state` / `reset_state` are TTL `High` / `Low` (pyserial inverts: `ser.dtr=True` / `ser.rts=True` drives the pin LOW). Keep `wait_for` spelled the way the firmware prints it (MB607: `Press CR key for command Debug Mode`). Devices without `reset` identify exactly as before. Other devices may use RTS, or omit reset entirely. The Device Editor has a **Reset** box for these fields; blank **Reset Line** means no reset.
-- `commands.initialize` / `commands.identify` — `message` to send and `pause_ms` to wait (milliseconds). An empty message is skipped. `initialize` may also have `expect` (substring to wait for after the message, case-insensitive) and `timeout_ms`. If `expect` is set and `timeout_ms` is omitted, `pause_ms` is the wait limit. The Device Editor has **Initialize Expect** and **Initialize Timeout** fields for those.
+- `commands.reset` — optional. If present, Identify/Scan pulses a control line **before** initialize: set `reset_state`, wait `pulse_ms`, return to `run_state`, then read until `wait_for` is seen or `timeout_ms`. `wait_for` is a case-insensitive substring of the **accumulated** receive buffer (extra text around the prompt is fine; a match may span reads). Optional `wait_for_regex` is a case-insensitive regex on that same buffer. If both are set, both must match. MB607 uses substring only (`Press CR key for command Debug Mode`) — no regex. `line` is `DTR` or `RTS`. `run_state` / `reset_state` are TTL `High` / `Low` (pyserial inverts: `ser.dtr=True` / `ser.rts=True` drives the pin LOW). Devices without `reset` identify exactly as before. The Device Editor has a **Reset** box; blank **Reset Line** means no reset; **Wait For Regex** is optional.
+- `commands.initialize` / `commands.identify` — `identify` is still `message` + `pause_ms` (empty message skipped). `initialize` may use that same old form, or a `steps` list of timed sends. Each step is `{"pause_ms": N}` and/or `{"send": "..."}` (send first when both are in one object). After the steps, `expect` is a case-insensitive substring of everything received during those sends/waits; if it is not there yet, Identify waits up to `timeout_ms` (or `pause_ms` if `timeout_ms` is omitted). If `steps` is present it is used instead of a single `message`. Other devices can keep `message` / `pause_ms` with no `steps`. The Device Editor has **Initialize Steps** (one `wait N` or `send ...` line per step, `\r` / `\n` allowed), plus **Initialize Expect** and **Initialize Timeout**.
 - `response.regex` — pattern that must appear in the reply. Named groups like `(?P<revision>...)` are allowed.
 - `response.device_column` — filled from regex groups and device fields (for example `Revision {revision}`). Used only when `append_response` is true.
 - `response.append_response` — `true` or `false` (default `false`). When true, Connected Device / Device Status is `manufacturer model short_description - <device_column>`. When false, the response text is never shown. The device editor checkbox is **Show response after device name**.
@@ -127,13 +127,20 @@ Example:
           "reset_state": "Low",
           "pulse_ms": 100,
           "wait_for": "Press CR key for command Debug Mode",
-          "timeout_ms": 3000
+          "timeout_ms": 1000
         },
         "initialize": {
-          "message": "\r\r",
-          "pause_ms": 1000,
-          "expect": "Enter command",
-          "timeout_ms": 3000
+          "steps": [
+            {"pause_ms": 10},
+            {"send": "\r"},
+            {"pause_ms": 10},
+            {"send": "debug\r"},
+            {"pause_ms": 10},
+            {"send": "\r"},
+            {"pause_ms": 100}
+          ],
+          "expect": "Enter Command",
+          "timeout_ms": 1000
         },
         "identify": {"message": "I\r", "pause_ms": 1000}
       },

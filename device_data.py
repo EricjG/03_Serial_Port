@@ -360,11 +360,26 @@ def set_control_line(ser, line, ttl_level):
 
 
 def format_sent_message(message):
-    """Log form of a serial payload: ``\\r\\r`` → ``CR CR``."""
+    """Log form of a serial payload: ``\\r\\r`` → ``CR CR``, ``debug\\r`` → ``debug CR``."""
     text = "" if message is None else str(message)
-    if text and all(ch in "\r\n" for ch in text):
-        return " ".join("CR" if ch == "\r" else "LF" for ch in text)
-    return text.replace("\r", "\\r").replace("\n", "\\n")
+    parts = []
+    buf = ""
+    for ch in text:
+        if ch == "\r":
+            if buf:
+                parts.append(buf)
+                buf = ""
+            parts.append("CR")
+        elif ch == "\n":
+            if buf:
+                parts.append(buf)
+                buf = ""
+            parts.append("LF")
+        else:
+            buf += ch
+    if buf:
+        parts.append(buf)
+    return " ".join(parts)
 
 
 def matched_text(buffer, needle):
@@ -379,36 +394,65 @@ def matched_text(buffer, needle):
     return text[idx : idx + len(want)]
 
 
-def wait_for_text(ser, needle, timeout_ms, sleep=time.sleep):
-    """Read until needle is a case-insensitive substring, or timeout.
+def read_available(ser):
+    """Decode whatever is currently in the serial input buffer."""
+    try:
+        waiting = int(getattr(ser, "in_waiting", 0) or 0)
+    except (TypeError, ValueError, AttributeError):
+        waiting = 0
+    if waiting <= 0:
+        return ""
+    chunk = ser.read(waiting)
+    if not chunk:
+        return ""
+    if isinstance(chunk, bytes):
+        return chunk.decode(errors="ignore")
+    return str(chunk)
 
-    Returns (found, buffer). An empty needle succeeds immediately. Elapsed
-    time is counted from sleep() so mocked sleep stays fast in tests.
+
+def prompt_found(buffer, wait_for="", wait_for_regex=""):
+    """True when every configured matcher hits the accumulated buffer."""
+    text = "" if buffer is None else str(buffer)
+    if wait_for and wait_for.lower() not in text.lower():
+        return False
+    if wait_for_regex:
+        try:
+            if not re.search(wait_for_regex, text, flags=re.IGNORECASE | re.DOTALL):
+                return False
+        except re.error:
+            return False
+    if not wait_for and not wait_for_regex:
+        return True
+    return True
+
+
+def wait_for_prompt(
+    ser,
+    timeout_ms,
+    sleep=time.sleep,
+    wait_for="",
+    wait_for_regex="",
+    initial="",
+):
+    """Read until wait_for / wait_for_regex match the accumulated buffer, or timeout.
+
+    Chunks are concatenated so a match may span reads. Elapsed time is counted
+    from sleep() so mocked sleep stays fast in tests.
     """
-    want = "" if needle is None else str(needle)
-    if not want:
-        return True, ""
+    buf = "" if initial is None else str(initial)
+    if not wait_for and not wait_for_regex:
+        return True, buf
+    if prompt_found(buf, wait_for, wait_for_regex):
+        return True, buf
     try:
         timeout_s = max(0.0, float(timeout_ms or 0) / 1000.0)
     except (TypeError, ValueError):
         timeout_s = 0.0
-    buf = ""
     elapsed = 0.0
     while True:
-        waiting = 0
-        try:
-            waiting = int(getattr(ser, "in_waiting", 0) or 0)
-        except (TypeError, ValueError, AttributeError):
-            waiting = 0
-        if waiting:
-            chunk = ser.read(waiting)
-            if chunk:
-                if isinstance(chunk, bytes):
-                    buf += chunk.decode(errors="ignore")
-                else:
-                    buf += str(chunk)
-                if want.lower() in buf.lower():
-                    return True, buf
+        buf += read_available(ser)
+        if prompt_found(buf, wait_for, wait_for_regex):
+            return True, buf
         if elapsed >= timeout_s:
             return False, buf
         step = WAIT_FOR_POLL_S if timeout_s - elapsed > WAIT_FOR_POLL_S else (
@@ -418,6 +462,17 @@ def wait_for_text(ser, needle, timeout_ms, sleep=time.sleep):
             return False, buf
         sleep(step)
         elapsed += step
+
+
+def wait_for_text(ser, needle, timeout_ms, sleep=time.sleep, initial=""):
+    """Read until needle is a case-insensitive substring, or timeout."""
+    return wait_for_prompt(
+        ser,
+        timeout_ms,
+        sleep=sleep,
+        wait_for="" if needle is None else str(needle),
+        initial=initial,
+    )
 
 
 def reset_command(device):
@@ -451,6 +506,122 @@ def initialize_expect(device):
     return text, timeout_ms
 
 
+def initialize_steps(device):
+    """Normalized commands.initialize.steps, or None when using message/pause_ms."""
+    commands = (device or {}).get("commands") if isinstance(device, dict) else None
+    if not isinstance(commands, dict):
+        return None
+    init = commands.get("initialize")
+    if not isinstance(init, dict):
+        return None
+    steps = init.get("steps")
+    if isinstance(steps, list) and steps:
+        return steps
+    return None
+
+
+def format_init_steps_text(steps):
+    """Editor text: one `wait N` / `send ...` line per step."""
+    lines = []
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        if "send" in step:
+            payload = "" if step.get("send") is None else str(step.get("send"))
+            escaped = (
+                payload.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+            )
+            lines.append(f"send {escaped}")
+        if "pause_ms" in step:
+            lines.append(f"wait {max(0, _as_int(step.get('pause_ms'), 0) or 0)}")
+    return "\n".join(lines)
+
+
+def parse_init_steps_text(text):
+    """Parse editor text into initialize.steps. Blank → []."""
+    steps = []
+    if text is None:
+        return steps
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        lower = line.lower()
+        if lower.startswith("wait ") or lower.startswith("pause_ms "):
+            number = line.split(None, 1)[1].strip()
+            steps.append({"pause_ms": max(0, _as_int(number, 0) or 0)})
+            continue
+        if lower.startswith("send "):
+            payload = line.split(None, 1)[1]
+            try:
+                payload = payload.encode("utf-8").decode("unicode_escape")
+            except UnicodeDecodeError:
+                pass
+            steps.append({"send": payload})
+            continue
+        if lower.startswith("send"):
+            steps.append({"send": ""})
+    return steps
+
+
+def run_initialize_sequence(ser, device, port="?", log=None, sleep=time.sleep):
+    """Run initialize.steps (or legacy message) then wait for expect.
+
+    Returns (ok, received, error). Devices with neither steps nor expect
+    return (True, '', None) and do nothing — caller uses command_steps.
+    """
+    commands = (device or {}).get("commands") if isinstance(device, dict) else None
+    init = commands.get("initialize") if isinstance(commands, dict) else None
+    if not isinstance(init, dict):
+        return True, "", None
+    steps = initialize_steps(device)
+    expect, timeout_ms = initialize_expect(device)
+    if not steps and not expect:
+        return True, "", None
+    buf = ""
+    if steps:
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if "send" in step:
+                message = "" if step.get("send") is None else str(step.get("send"))
+                ser.write(message.encode())
+                if callable(log):
+                    log(f"{port} - Sent: {format_sent_message(message)}")
+                buf += read_available(ser)
+            if "pause_ms" in step:
+                pause_ms = max(0, _as_int(step.get("pause_ms"), 0) or 0)
+                if callable(log):
+                    log(f"{port} - Wait {pause_ms} ms")
+                if pause_ms:
+                    sleep(pause_ms / 1000.0)
+                buf += read_available(ser)
+    else:
+        message = init.get("message") or ""
+        if message:
+            ser.write(str(message).encode())
+            if callable(log):
+                log(f"{port} - Sent: {format_sent_message(message)}")
+            buf += read_available(ser)
+    if not expect:
+        return True, buf, None
+    if prompt_found(buf, expect, ""):
+        if callable(log):
+            log(f"{port} - Received: {matched_text(buf, expect)}")
+        return True, buf, None
+    found, buf = wait_for_prompt(
+        ser, timeout_ms, sleep=sleep, wait_for=expect, initial=buf
+    )
+    if found:
+        if callable(log):
+            log(f"{port} - Received: {matched_text(buf, expect)}")
+        return True, buf, None
+    error = f"timeout waiting for {expect!r}"
+    if callable(log):
+        log(f"{port} - Timeout waiting for {expect!r}")
+    return False, buf, error
+
+
 def run_reset_sequence(ser, device, port="?", log=None, sleep=time.sleep):
     """Pulse the reset line, then wait for wait_for. (ok, received, error).
 
@@ -468,15 +639,24 @@ def run_reset_sequence(ser, device, port="?", log=None, sleep=time.sleep):
     if callable(log):
         log(f"{port} - {line} reset pulse {pulse_ms} ms")
     wait_for = reset.get("wait_for") or ""
-    if not wait_for:
+    wait_for_regex = reset.get("wait_for_regex") or ""
+    if not wait_for and not wait_for_regex:
         return True, "", None
     timeout_ms = max(0, _as_int(reset.get("timeout_ms"), 0) or 0)
-    found, received = wait_for_text(ser, wait_for, timeout_ms, sleep=sleep)
+    found, received = wait_for_prompt(
+        ser,
+        timeout_ms,
+        sleep=sleep,
+        wait_for=wait_for,
+        wait_for_regex=wait_for_regex,
+    )
     if found:
+        shown = matched_text(received, wait_for) if wait_for else received
         if callable(log):
-            log(f"{port} - Received: {matched_text(received, wait_for)}")
+            log(f"{port} - Received: {shown}")
         return True, received, None
-    error = f"{line} reset timeout waiting for {wait_for!r}"
+    target = wait_for or wait_for_regex
+    error = f"{line} reset timeout waiting for {target!r}"
     if callable(log):
         log(f"{port} - {error[0].upper() + error[1:]}")
     return False, received, error
@@ -611,6 +791,24 @@ def _migrate_serial_parameters(params):
     }
 
 
+def _migrate_init_steps(raw):
+    if not isinstance(raw, list):
+        return None
+    steps = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        step = {}
+        if "send" in item:
+            send = item.get("send")
+            step["send"] = "" if send is None else str(send)
+        if "pause_ms" in item or "pause" in item:
+            step["pause_ms"] = _pause_ms_from_command(item)
+        if step:
+            steps.append(step)
+    return steps or None
+
+
 def _migrate_command(command):
     command = command if isinstance(command, dict) else {}
     message = command.get("message", "")
@@ -622,6 +820,9 @@ def _migrate_command(command):
         migrated["expect"] = str(expect)
     if "timeout_ms" in command and command["timeout_ms"] is not None:
         migrated["timeout_ms"] = max(0, _as_int(command["timeout_ms"], 0) or 0)
+    steps = _migrate_init_steps(command.get("steps"))
+    if steps is not None:
+        migrated["steps"] = steps
     return migrated
 
 
@@ -641,7 +842,7 @@ def _migrate_reset(reset):
         wait_for = ""
     else:
         wait_for = str(wait_for)
-    return {
+    migrated = {
         "line": line,
         "run_state": run_state,
         "reset_state": reset_state,
@@ -649,6 +850,16 @@ def _migrate_reset(reset):
         "wait_for": wait_for,
         "timeout_ms": max(0, _as_int(reset.get("timeout_ms"), 0) or 0),
     }
+    regex = reset.get("wait_for_regex")
+    if regex is not None and str(regex):
+        pattern = str(regex)
+        try:
+            re.compile(pattern)
+        except re.error:
+            pattern = None
+        if pattern:
+            migrated["wait_for_regex"] = pattern
+    return migrated
 
 
 def migrate_device(device):
