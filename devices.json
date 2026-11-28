@@ -58,9 +58,19 @@
         "flow_control": "None"
       },
       "commands": {
+        "reset": {
+          "line": "DTR",
+          "run_state": "High",
+          "reset_state": "Low",
+          "pulse_ms": 100,
+          "wait_for": "Press CR key for command Debug Mode",
+          "timeout_ms": 3000
+        },
         "initialize": {
           "message": "\r\r",
-          "pause_ms": 1000
+          "pause_ms": 1000,
+          "expect": "Enter command",
+          "timeout_ms": 3000
         },
         "identify": {
           "message": "I\r",

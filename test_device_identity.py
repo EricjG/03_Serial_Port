@@ -98,6 +98,12 @@ def _bare_app():
 
 
 MB607_FLASH_REPLY = "Running Flash        REV= 0010, RevP1.01 003/09/24"
+MB607_WAIT_FOR = "Press CR key for command Debug Mode"
+MB607_EXPECT = "Enter command"
+MB607_PROBE_REPLY = f"{MB607_WAIT_FOR}\r\n{MB607_EXPECT}\r\n{MB607_FLASH_REPLY}"
+MB607_RESET_TIMEOUT = (
+    "DTR reset timeout waiting for 'Press CR key for command Debug Mode'"
+)
 
 
 class _Flag:
@@ -550,7 +556,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
             return result[0], result[1]
 
     def test_matching_reply_returns_label_and_baud(self):
-        FakeSerial.response = MB607_FLASH_REPLY.encode()
+        FakeSerial.response = MB607_PROBE_REPLY.encode()
         label, baud = self._identify("COM5", "4292")
         self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 460800)
@@ -627,7 +633,8 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         app._log_cont = MagicMock()
         app.root = MagicMock()
         mb607 = _device_by_model("MB607")
-        FakeSerial.response = b"RevPK garbage\r\n"
+        garbage = f"{MB607_WAIT_FOR}\r\n{MB607_EXPECT}\r\nRevPK garbage\r\n"
+        FakeSerial.response = garbage.encode()
         with patch("serial_port_app.serial.Serial", FakeSerial), patch(
             "serial_port_app.time.sleep"
         ):
@@ -646,14 +653,14 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertEqual(logs[0], format_port_scan_header("COM5", "0x10C4:0xEA60"))
         self.assertIn(
             _device_line(
-                mb607, 115200, "8N1", "0x10C4:0xEA60", reply="RevPK garbage\r\n"
+                mb607, 115200, "8N1", "0x10C4:0xEA60", reply=garbage
             ),
             logs,
         )
         self.assertIn(DEVICE_SCAN_DONE, logs)
         self.assertFalse(any("NOT FOUND" in text for text in logs))
         self.assertFalse(any("Trying " in text for text in logs))
-        app._log.assert_called_with(DEVICE_SCANNING)
+        app._log.assert_any_call(DEVICE_SCANNING)
 
     def test_scan_logs_each_baud_try_and_skip(self):
         app = _bare_app()
@@ -675,8 +682,8 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
         self.assertEqual(
             logs,
             [
-                _device_line(mb607, 460800, "8N1", "4292", reply=""),
-                _device_line(mb607, 115200, "8N1", "4292", reply=""),
+                _device_line(mb607, 460800, "8N1", "4292", error=MB607_RESET_TIMEOUT),
+                _device_line(mb607, 115200, "8N1", "4292", error=MB607_RESET_TIMEOUT),
             ],
         )
 
@@ -714,7 +721,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
 
     def test_open_failure_on_first_baud_tries_next_baud_in_the_list(self):
         FakeSerial.fail_baudrates = (460800,)
-        FakeSerial.response = MB607_FLASH_REPLY.encode()
+        FakeSerial.response = MB607_PROBE_REPLY.encode()
         label, baud = self._identify("COM5", "4292")
         self.assertEqual(label, "Revision 1.01")
         self.assertEqual(baud, 115200)
@@ -774,7 +781,7 @@ class IdentifyWithMockSerialTests(FakeSerialTests):
 
     def test_open_failure_logs_error_then_tries_next_baud(self):
         FakeSerial.fail_baudrates = (460800,)
-        FakeSerial.response = MB607_FLASH_REPLY.encode()
+        FakeSerial.response = MB607_PROBE_REPLY.encode()
         app = _bare_app()
         app._log_cont = MagicMock()
         mb607 = _device_by_model("MB607")
@@ -819,7 +826,7 @@ class ScanLogLayoutTests(FakeSerialTests):
         )
         FakeSerial.responses_by_baud = {
             460800: b"",
-            115200: MB607_FLASH_REPLY.encode(),
+            115200: MB607_PROBE_REPLY.encode(),
         }
         FakeSerial.response = b""
         with patch("serial_port_app.serial.Serial", FakeSerial), patch(
@@ -832,12 +839,12 @@ class ScanLogLayoutTests(FakeSerialTests):
                 "Port: COM8 (0x10C4/0xEA60)",
                 "Device: SIMCom SIM7080 115200 8N1 (0x0403): "
                 "Skipped, port ID doesn't match",
-                "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response",
+                _device_line(mb607, 460800, "8N1", "0x10C4:0xEA60", error=MB607_RESET_TIMEOUT),
                 "Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): Matched",
                 DEVICE_SCAN_DONE,
             ],
         )
-        app._log.assert_called_with(DEVICE_SCANNING)
+        app._log.assert_any_call(DEVICE_SCANNING)
 
     def test_ports_are_outer_loop_then_devices_json_then_baud_list(self):
         sim = _device_by_model("SIM7080")
@@ -873,8 +880,8 @@ class ScanLogLayoutTests(FakeSerialTests):
             [
                 "Device: SIMCom SIM7080 115200 8N1 (0x0403): "
                 "Skipped, port ID doesn't match",
-                "Device: MUX Wiring MB607 460800 8N1 (0x10C4/0xEA60): No response",
-                "Device: MUX Wiring MB607 115200 8N1 (0x10C4/0xEA60): No response",
+                _device_line(mb607, 460800, "8N1", "0x10C4:0xEA60", error=MB607_RESET_TIMEOUT),
+                _device_line(mb607, 115200, "8N1", "0x10C4:0xEA60", error=MB607_RESET_TIMEOUT),
             ],
         )
         self.assertEqual(
@@ -1778,6 +1785,45 @@ class DeviceEditorLoadTests(unittest.TestCase):
         editor.load_device_details()
         editor.append_response_var.set.assert_called_with(False)
 
+    def test_load_device_details_fills_reset_and_initialize_expect(self):
+        editor = self._editor(str(DEVICES_JSON))
+        editor.devices = editor.load_devices()
+        editor.device_dropdown = MagicMock()
+        editor.device_dropdown.current.return_value = 1  # MB607
+        fields = {
+            "Manufacturer": MagicMock(),
+            "Model": MagicMock(),
+            PORT_VID_PID_LABEL: MagicMock(),
+            "Reset Line": MagicMock(),
+            "Run State": MagicMock(),
+            "Reset State": MagicMock(),
+            "Pulse (ms)": MagicMock(),
+            "Wait For": MagicMock(),
+            "Reset Timeout (ms)": MagicMock(),
+            "Initialize Command": MagicMock(),
+            "Initialize Pause": MagicMock(),
+            "Initialize Expect": MagicMock(),
+            "Initialize Timeout": MagicMock(),
+            "Identify Command": MagicMock(),
+            "Identify Pause": MagicMock(),
+            "Response Regex": MagicMock(),
+        }
+        editor.fields = fields
+        editor.append_response_var = MagicMock()
+        editor.load_device_details()
+        fields["Reset Line"].set.assert_called_with("DTR")
+        fields["Run State"].set.assert_called_with("High")
+        fields["Reset State"].set.assert_called_with("Low")
+        fields["Pulse (ms)"].insert.assert_called_with(0, "100")
+        fields["Wait For"].insert.assert_called_with(0, MB607_WAIT_FOR)
+        fields["Reset Timeout (ms)"].insert.assert_called_with(0, "3000")
+        fields["Initialize Expect"].insert.assert_called_with(0, MB607_EXPECT)
+        fields["Initialize Timeout"].insert.assert_called_with(0, "3000")
+        editor.device_dropdown.current.return_value = 0  # SIM7080
+        editor.load_device_details()
+        fields["Reset Line"].set.assert_called_with("")
+        fields["Initialize Expect"].insert.assert_called_with(0, "")
+
     def test_missing_file_or_key_returns_empty_list(self):
         self.assertEqual(
             self._editor(str(ROOT / "no_such_devices.json")).load_devices(),
@@ -1823,8 +1869,24 @@ class DeviceEditorLoadTests(unittest.TestCase):
         editor.fields["Bytesize"].get.return_value = "8"
         editor.fields["Initialize Command"].get.return_value = "''"
         editor.fields["Initialize Pause"].get.return_value = "1"
+        editor.fields["Initialize Expect"] = MagicMock()
+        editor.fields["Initialize Expect"].get.return_value = ""
+        editor.fields["Initialize Timeout"] = MagicMock()
+        editor.fields["Initialize Timeout"].get.return_value = ""
         editor.fields["Identify Command"].get.return_value = "''"
         editor.fields["Identify Pause"].get.return_value = "1"
+        editor.fields["Reset Line"] = MagicMock()
+        editor.fields["Reset Line"].get.return_value = ""
+        editor.fields["Run State"] = MagicMock()
+        editor.fields["Run State"].get.return_value = "High"
+        editor.fields["Reset State"] = MagicMock()
+        editor.fields["Reset State"].get.return_value = "Low"
+        editor.fields["Pulse (ms)"] = MagicMock()
+        editor.fields["Pulse (ms)"].get.return_value = ""
+        editor.fields["Wait For"] = MagicMock()
+        editor.fields["Wait For"].get.return_value = ""
+        editor.fields["Reset Timeout (ms)"] = MagicMock()
+        editor.fields["Reset Timeout (ms)"].get.return_value = ""
         editor.fields["Response Regex"].get.return_value = ""
         editor.append_response_var = MagicMock()
         editor.append_response_var.get.return_value = True

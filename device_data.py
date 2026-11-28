@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 STANDARD_BAUD_RATES = (
     300,
@@ -43,6 +44,10 @@ _DEVICE_FORMAT_KEYS = (
     "short_description",
     "long_description",
 )
+
+RESET_LINES = ("DTR", "RTS")
+TTL_LEVELS = ("High", "Low")
+WAIT_FOR_POLL_S = 0.05
 
 
 class _BlankMissing(dict):
@@ -304,12 +309,14 @@ def controllers_field_text(device):
     return format_controllers_text(_migrate_controllers(device or {}))
 
 
-def command_steps(device):
+def command_steps(device, keys=("initialize", "identify")):
     """(message, pause_seconds) for initialize then identify. Empty messages are skipped."""
     commands = device.get("commands") or {}
     steps = []
-    for key in ("initialize", "identify"):
+    for key in keys:
         command = commands.get(key) or {}
+        if not isinstance(command, dict):
+            continue
         message = command.get("message")
         if message is None or message == "":
             continue
@@ -320,6 +327,159 @@ def command_steps(device):
             pause_s = 0.0
         steps.append((str(message), pause_s))
     return steps
+
+
+def _normalize_ttl(value):
+    """JSON High/Low (and a few spellings) → 'High' / 'Low', else None."""
+    if value is None or value == "":
+        return None
+    text = str(value).strip().lower()
+    if text in ("high", "h", "1", "true"):
+        return "High"
+    if text in ("low", "l", "0", "false"):
+        return "Low"
+    return None
+
+
+def ttl_level_to_pyserial(level):
+    """Map TTL High/Low to pyserial dtr/rts.
+
+    pyserial True drives the adapter pin LOW; False drives it HIGH.
+    """
+    return _normalize_ttl(level) == "Low"
+
+
+def set_control_line(ser, line, ttl_level):
+    """Drive DTR or RTS to a TTL High/Low level (pyserial polarity)."""
+    value = ttl_level_to_pyserial(ttl_level)
+    name = str(line or "").strip().upper()
+    if name == "RTS":
+        ser.rts = value
+    else:
+        ser.dtr = value
+
+
+def format_sent_message(message):
+    """Log form of a serial payload: ``\\r\\r`` → ``CR CR``."""
+    text = "" if message is None else str(message)
+    if text and all(ch in "\r\n" for ch in text):
+        return " ".join("CR" if ch == "\r" else "LF" for ch in text)
+    return text.replace("\r", "\\r").replace("\n", "\\n")
+
+
+def matched_text(buffer, needle):
+    """Slice of buffer that matched needle (case-insensitive), else a short preview."""
+    text = "" if buffer is None else str(buffer)
+    want = "" if needle is None else str(needle)
+    if not want:
+        return text
+    idx = text.lower().find(want.lower())
+    if idx < 0:
+        return text
+    return text[idx : idx + len(want)]
+
+
+def wait_for_text(ser, needle, timeout_ms, sleep=time.sleep):
+    """Read until needle is a case-insensitive substring, or timeout.
+
+    Returns (found, buffer). An empty needle succeeds immediately. Elapsed
+    time is counted from sleep() so mocked sleep stays fast in tests.
+    """
+    want = "" if needle is None else str(needle)
+    if not want:
+        return True, ""
+    try:
+        timeout_s = max(0.0, float(timeout_ms or 0) / 1000.0)
+    except (TypeError, ValueError):
+        timeout_s = 0.0
+    buf = ""
+    elapsed = 0.0
+    while True:
+        waiting = 0
+        try:
+            waiting = int(getattr(ser, "in_waiting", 0) or 0)
+        except (TypeError, ValueError, AttributeError):
+            waiting = 0
+        if waiting:
+            chunk = ser.read(waiting)
+            if chunk:
+                if isinstance(chunk, bytes):
+                    buf += chunk.decode(errors="ignore")
+                else:
+                    buf += str(chunk)
+                if want.lower() in buf.lower():
+                    return True, buf
+        if elapsed >= timeout_s:
+            return False, buf
+        step = WAIT_FOR_POLL_S if timeout_s - elapsed > WAIT_FOR_POLL_S else (
+            timeout_s - elapsed
+        )
+        if step <= 0:
+            return False, buf
+        sleep(step)
+        elapsed += step
+
+
+def reset_command(device):
+    """Normalized commands.reset dict, or None when the device has no reset."""
+    commands = (device or {}).get("commands") if isinstance(device, dict) else None
+    if not isinstance(commands, dict):
+        return None
+    reset = commands.get("reset")
+    return reset if isinstance(reset, dict) else None
+
+
+def initialize_expect(device):
+    """(expect_text_or_None, timeout_ms) from commands.initialize."""
+    commands = (device or {}).get("commands") if isinstance(device, dict) else None
+    if not isinstance(commands, dict):
+        return None, 0
+    init = commands.get("initialize")
+    if not isinstance(init, dict):
+        return None, 0
+    expect = init.get("expect")
+    if expect is None:
+        text = ""
+    else:
+        text = str(expect)
+    if not text:
+        return None, 0
+    if "timeout_ms" in init and init["timeout_ms"] is not None:
+        timeout_ms = max(0, _as_int(init["timeout_ms"], 0) or 0)
+    else:
+        timeout_ms = max(0, _as_int(init.get("pause_ms"), 0) or 0)
+    return text, timeout_ms
+
+
+def run_reset_sequence(ser, device, port="?", log=None, sleep=time.sleep):
+    """Pulse the reset line, then wait for wait_for. (ok, received, error).
+
+    Devices without commands.reset return (True, '', None) and do nothing.
+    """
+    reset = reset_command(device)
+    if not reset:
+        return True, "", None
+    line = reset.get("line") or "DTR"
+    pulse_ms = max(0, _as_int(reset.get("pulse_ms"), 0) or 0)
+    set_control_line(ser, line, reset.get("reset_state"))
+    if pulse_ms:
+        sleep(pulse_ms / 1000.0)
+    set_control_line(ser, line, reset.get("run_state"))
+    if callable(log):
+        log(f"{port} - {line} reset pulse {pulse_ms} ms")
+    wait_for = reset.get("wait_for") or ""
+    if not wait_for:
+        return True, "", None
+    timeout_ms = max(0, _as_int(reset.get("timeout_ms"), 0) or 0)
+    found, received = wait_for_text(ser, wait_for, timeout_ms, sleep=sleep)
+    if found:
+        if callable(log):
+            log(f"{port} - Received: {matched_text(received, wait_for)}")
+        return True, received, None
+    error = f"{line} reset timeout waiting for {wait_for!r}"
+    if callable(log):
+        log(f"{port} - {error[0].upper() + error[1:]}")
+    return False, received, error
 
 
 def _parity_code(value):
@@ -456,7 +616,39 @@ def _migrate_command(command):
     message = command.get("message", "")
     if message is None:
         message = ""
-    return {"message": message, "pause_ms": _pause_ms_from_command(command)}
+    migrated = {"message": message, "pause_ms": _pause_ms_from_command(command)}
+    expect = command.get("expect")
+    if expect is not None and str(expect):
+        migrated["expect"] = str(expect)
+    if "timeout_ms" in command and command["timeout_ms"] is not None:
+        migrated["timeout_ms"] = max(0, _as_int(command["timeout_ms"], 0) or 0)
+    return migrated
+
+
+def _migrate_reset(reset):
+    """Normalize commands.reset. Invalid / empty → None (device has no reset)."""
+    if not isinstance(reset, dict) or not reset:
+        return None
+    line = str(reset.get("line") or "").strip().upper()
+    if line not in RESET_LINES:
+        return None
+    run_state = _normalize_ttl(reset.get("run_state"))
+    reset_state = _normalize_ttl(reset.get("reset_state"))
+    if run_state is None or reset_state is None:
+        return None
+    wait_for = reset.get("wait_for")
+    if wait_for is None:
+        wait_for = ""
+    else:
+        wait_for = str(wait_for)
+    return {
+        "line": line,
+        "run_state": run_state,
+        "reset_state": reset_state,
+        "pulse_ms": max(0, _as_int(reset.get("pulse_ms"), 0) or 0),
+        "wait_for": wait_for,
+        "timeout_ms": max(0, _as_int(reset.get("timeout_ms"), 0) or 0),
+    }
 
 
 def migrate_device(device):
@@ -494,6 +686,9 @@ def migrate_device(device):
             "append_response": _as_bool(response.get("append_response"), False),
         },
     }
+    reset = _migrate_reset(commands.get("reset"))
+    if reset is not None:
+        migrated["commands"]["reset"] = reset
     return migrated, None
 
 
