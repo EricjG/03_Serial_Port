@@ -142,7 +142,11 @@ def _logged(mock_log):
 
 
 class FakeSerial:
-    """Context-manager stand-in for pyserial.Serial."""
+    """Context-manager stand-in for pyserial.Serial.
+
+    Matches the idle-DTR open helper: construct closed, set dtr, then open().
+    fail_open / fail_baudrates raise from open(), as a real port-busy error would.
+    """
 
     fail_open = False
     fail_baudrates = ()
@@ -150,12 +154,15 @@ class FakeSerial:
     responses_by_baud = {}
     instances = []
 
-    def __init__(self, port, **kwargs):
+    def __init__(self, port=None, **kwargs):
         self.port = port
         self.kwargs = kwargs
         self.written = []
-        if FakeSerial.fail_open or kwargs.get("baudrate") in FakeSerial.fail_baudrates:
-            raise SerialException("port busy")
+        self._dtr = True
+        self._rts = True
+        self.is_open = False
+        self.events = []
+        self.close_calls = 0
         baud = kwargs.get("baudrate")
         by_baud = FakeSerial.responses_by_baud or {}
         if baud in by_baud:
@@ -166,10 +173,41 @@ class FakeSerial:
         self.in_waiting = len(data)
         FakeSerial.instances.append(self)
 
+    @property
+    def dtr(self):
+        return self._dtr
+
+    @dtr.setter
+    def dtr(self, value):
+        self._dtr = bool(value)
+        self.events.append(("dtr", self._dtr, self.is_open))
+
+    @property
+    def rts(self):
+        return self._rts
+
+    @rts.setter
+    def rts(self, value):
+        self._rts = bool(value)
+        self.events.append(("rts", self._rts, self.is_open))
+
+    def open(self):
+        self.events.append(("open", self._dtr, self.is_open))
+        baud = self.kwargs.get("baudrate")
+        if FakeSerial.fail_open or baud in FakeSerial.fail_baudrates:
+            raise SerialException("port busy")
+        self.is_open = True
+
+    def close(self):
+        self.close_calls += 1
+        self.is_open = False
+        self.events.append(("close",))
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        self.close()
         return False
 
     def write(self, data):
