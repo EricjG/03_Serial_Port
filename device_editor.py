@@ -5,7 +5,12 @@ import json
 import os
 
 from app_icon import apply_window_icon, set_windows_app_user_model_id
-from device_data import controllers_field_text, parse_controllers_text
+from device_data import (
+    TTL_LEVELS,
+    RESET_LINES,
+    controllers_field_text,
+    parse_controllers_text,
+)
 
 # Theme - Serial Port Apps (Iris): this field only.
 UI_FG = "#1a1a1a"
@@ -181,10 +186,40 @@ class DeviceEditorApp:
             combo.pack(fill=tk.X, expand=True)
             self.fields[serial_label] = combo
 
+        # Optional hardware reset pulse (DTR/RTS) before initialize
+        reset_frame = tk.LabelFrame(self.details_frame, text="Reset", padx=10, pady=10)
+        reset_frame.pack(fill=tk.X, pady=7)
+        reset_dropdowns = {
+            "Reset Line": ("",) + RESET_LINES,
+            "Run State": ("",) + TTL_LEVELS,
+            "Reset State": ("",) + TTL_LEVELS,
+        }
+        for label, options in reset_dropdowns.items():
+            frame = tk.Frame(reset_frame)
+            frame.pack(fill=tk.X, pady=2)
+            tk.Label(frame, text=label, width=20, anchor="w").pack(side=tk.LEFT)
+            combo = ttk.Combobox(
+                frame, values=options, state="readonly", width=10
+            )
+            combo.pack(fill=tk.X, expand=True, padx=5)
+            self.fields[label] = combo
+        for label in ("Pulse (ms)", "Wait For", "Reset Timeout (ms)"):
+            frame = tk.Frame(reset_frame)
+            frame.pack(fill=tk.X, pady=2)
+            tk.Label(frame, text=label, width=20, anchor="w").pack(side=tk.LEFT)
+            entry = tk.Entry(frame)
+            entry.pack(fill=tk.X, expand=True, padx=5)
+            self.fields[label] = entry
+
         # Create a section for Initialize commands
         init_frame = tk.LabelFrame(self.details_frame, text="Initialize", padx=10, pady=10)
         init_frame.pack(fill=tk.X, pady=7)  # Reduced pady by 30%
-        for label in ["Initialize Command", "Initialize Pause"]:
+        for label in (
+            "Initialize Command",
+            "Initialize Pause",
+            "Initialize Expect",
+            "Initialize Timeout",
+        ):
             frame = tk.Frame(init_frame)
             frame.pack(fill=tk.X, pady=2)
             tk.Label(frame, text=label, width=20, anchor="w").pack(side=tk.LEFT)
@@ -221,6 +256,46 @@ class DeviceEditorApp:
             anchor="w",
         ).pack(fill=tk.X, pady=2)
 
+    @staticmethod
+    def _pause_field_value(command):
+        """Show pause_ms when present; fall back to old pause (seconds)."""
+        command = command or {}
+        if command.get("pause_ms") is not None and command.get("pause_ms") != "":
+            return str(command.get("pause_ms"))
+        if command.get("pause") is not None and command.get("pause") != "":
+            try:
+                return str(int(round(float(command.get("pause")) * 1000)))
+            except (TypeError, ValueError):
+                return str(command.get("pause"))
+        return ""
+
+    @staticmethod
+    def _pause_ms_from_field(text):
+        text = (text or "").strip()
+        if not text:
+            return 0
+        return int(float(text))
+
+    def _save_reset_fields(self, device):
+        line = (self.fields["Reset Line"].get() or "").strip().upper()
+        if not line:
+            device["commands"].pop("reset", None)
+            return
+        def _int_field(label, default=0):
+            text = (self.fields[label].get() or "").strip()
+            if not text:
+                return default
+            return int(float(text))
+
+        device["commands"]["reset"] = {
+            "line": line,
+            "run_state": (self.fields["Run State"].get() or "High").strip() or "High",
+            "reset_state": (self.fields["Reset State"].get() or "Low").strip() or "Low",
+            "pulse_ms": _int_field("Pulse (ms)", 0),
+            "wait_for": self.fields["Wait For"].get() if "Wait For" in self.fields else "",
+            "timeout_ms": _int_field("Reset Timeout (ms)", 0),
+        }
+
     def load_device_details(self, event=None):
         """Load the details of the selected device into the fields."""
         selected_index = self.device_dropdown.current()
@@ -244,18 +319,52 @@ class DeviceEditorApp:
             self.fields["Stopbits"].set(device.get("serial_parameters", {}).get("stopbits", ""))
         if "Bytesize" in self.fields:
             self.fields["Bytesize"].set(device.get("serial_parameters", {}).get("bytesize", ""))
+        commands = device.get("commands") or {}
+        initialize = commands.get("initialize") or {}
+        identify = commands.get("identify") or {}
+        reset = commands.get("reset") if isinstance(commands.get("reset"), dict) else {}
+        if "Reset Line" in self.fields:
+            self.fields["Reset Line"].set(reset.get("line", ""))
+        if "Run State" in self.fields:
+            self.fields["Run State"].set(reset.get("run_state", ""))
+        if "Reset State" in self.fields:
+            self.fields["Reset State"].set(reset.get("reset_state", ""))
+        if "Pulse (ms)" in self.fields:
+            self.fields["Pulse (ms)"].delete(0, tk.END)
+            pulse = reset.get("pulse_ms", "")
+            self.fields["Pulse (ms)"].insert(0, "" if pulse in (None, "") else str(pulse))
+        if "Wait For" in self.fields:
+            self.fields["Wait For"].delete(0, tk.END)
+            self.fields["Wait For"].insert(0, reset.get("wait_for", ""))
+        if "Reset Timeout (ms)" in self.fields:
+            self.fields["Reset Timeout (ms)"].delete(0, tk.END)
+            timeout = reset.get("timeout_ms", "")
+            self.fields["Reset Timeout (ms)"].insert(
+                0, "" if timeout in (None, "") else str(timeout)
+            )
         if "Initialize Command" in self.fields:
             self.fields["Initialize Command"].delete(0, tk.END)
-            self.fields["Initialize Command"].insert(0, repr(device.get("commands", {}).get("initialize", {}).get("message", "")))
+            self.fields["Initialize Command"].insert(0, repr(initialize.get("message", "")))
         if "Initialize Pause" in self.fields:
             self.fields["Initialize Pause"].delete(0, tk.END)
-            self.fields["Initialize Pause"].insert(0, device.get("commands", {}).get("initialize", {}).get("pause", ""))
+            self.fields["Initialize Pause"].insert(
+                0, self._pause_field_value(initialize)
+            )
+        if "Initialize Expect" in self.fields:
+            self.fields["Initialize Expect"].delete(0, tk.END)
+            self.fields["Initialize Expect"].insert(0, initialize.get("expect", ""))
+        if "Initialize Timeout" in self.fields:
+            self.fields["Initialize Timeout"].delete(0, tk.END)
+            init_timeout = initialize.get("timeout_ms", "")
+            self.fields["Initialize Timeout"].insert(
+                0, "" if init_timeout in (None, "") else str(init_timeout)
+            )
         if "Identify Command" in self.fields:
             self.fields["Identify Command"].delete(0, tk.END)
-            self.fields["Identify Command"].insert(0, repr(device.get("commands", {}).get("identify", {}).get("message", "")))
+            self.fields["Identify Command"].insert(0, repr(identify.get("message", "")))
         if "Identify Pause" in self.fields:
             self.fields["Identify Pause"].delete(0, tk.END)
-            self.fields["Identify Pause"].insert(0, device.get("commands", {}).get("identify", {}).get("pause", ""))
+            self.fields["Identify Pause"].insert(0, self._pause_field_value(identify))
         if "Response Regex" in self.fields:
             self.fields["Response Regex"].delete(0, tk.END)
             self.fields["Response Regex"].insert(0, device.get("response", {}).get("regex", ""))
@@ -281,10 +390,46 @@ class DeviceEditorApp:
         device["serial_parameters"]["parity"] = self.fields["Parity"].get()
         device["serial_parameters"]["stopbits"] = float(self.fields["Stopbits"].get())
         device["serial_parameters"]["bytesize"] = int(self.fields["Bytesize"].get())
-        device["commands"]["initialize"]["message"] = eval(self.fields["Initialize Command"].get())  # Use eval to parse escape characters
-        device["commands"]["initialize"]["pause"] = int(self.fields["Initialize Pause"].get())
-        device["commands"]["identify"]["message"] = eval(self.fields["Identify Command"].get())  # Use eval to parse escape characters
-        device["commands"]["identify"]["pause"] = int(self.fields["Identify Pause"].get())
+        if "commands" not in device or not isinstance(device.get("commands"), dict):
+            device["commands"] = {}
+        if "initialize" not in device["commands"] or not isinstance(
+            device["commands"].get("initialize"), dict
+        ):
+            device["commands"]["initialize"] = {}
+        if "identify" not in device["commands"] or not isinstance(
+            device["commands"].get("identify"), dict
+        ):
+            device["commands"]["identify"] = {}
+        if "Initialize Command" in self.fields:
+            device["commands"]["initialize"]["message"] = eval(
+                self.fields["Initialize Command"].get()
+            )  # Use eval to parse escape characters
+        if "Initialize Pause" in self.fields:
+            pause_ms = self._pause_ms_from_field(self.fields["Initialize Pause"].get())
+            device["commands"]["initialize"]["pause_ms"] = pause_ms
+            device["commands"]["initialize"].pop("pause", None)
+        if "Initialize Expect" in self.fields:
+            expect = (self.fields["Initialize Expect"].get() or "").strip()
+            if expect:
+                device["commands"]["initialize"]["expect"] = expect
+            else:
+                device["commands"]["initialize"].pop("expect", None)
+        if "Initialize Timeout" in self.fields:
+            timeout_text = (self.fields["Initialize Timeout"].get() or "").strip()
+            if timeout_text:
+                device["commands"]["initialize"]["timeout_ms"] = int(timeout_text)
+            else:
+                device["commands"]["initialize"].pop("timeout_ms", None)
+        if "Identify Command" in self.fields:
+            device["commands"]["identify"]["message"] = eval(
+                self.fields["Identify Command"].get()
+            )  # Use eval to parse escape characters
+        if "Identify Pause" in self.fields:
+            pause_ms = self._pause_ms_from_field(self.fields["Identify Pause"].get())
+            device["commands"]["identify"]["pause_ms"] = pause_ms
+            device["commands"]["identify"].pop("pause", None)
+        if "Reset Line" in self.fields:
+            self._save_reset_fields(device)
         if "response" not in device or not isinstance(device.get("response"), dict):
             device["response"] = {}
         device["response"]["regex"] = self.fields["Response Regex"].get()
@@ -310,11 +455,11 @@ class DeviceEditorApp:
             "commands": {
                 "initialize": {
                     "message": "",
-                    "pause": 1
+                    "pause_ms": 1000,
                 },
                 "identify": {
                     "message": "",
-                    "pause": 1
+                    "pause_ms": 1000,
                 }
             },
             "response": {

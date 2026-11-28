@@ -1,6 +1,6 @@
 # Serial Port Application UI
 
-Version: 3.16 — In Use `xN` count; DTR idle-high + TEMP Reset (DTR) pulse (Nov 28, 2026).
+Version: 3.17 — Per-device reset sequence on Identify; TEMP Reset (DTR) button removed (Nov 28, 2026).
 
 ## Colors
 - Window / panels: `#FFFFFF` (white)
@@ -55,7 +55,7 @@ Version: 3.16 — In Use `xN` count; DTR idle-high + TEMP Reset (DTR) pulse (Nov
 - Panels, white boxes, and the Open/Identify column share one right edge; labels and controls share one left edge
 
 ### White box 1
-- One row: **Port** combo (sized from `/tmp/serialdemo/ttyUSB0`, then shortened by the Baud grow), **Baud** (1.5× the old 8-char width), **Settings**, TEMP **Reset (DTR)**, **Open** at the right. Port shrinks by the same pixel amount Baud grows, so the row width and Open stay put. Reset sits immediately left of Open (16px gap; at least 96px, wider if the label needs it) so Open and Identify keep the shared right edge.
+- One row: **Port** combo (sized from `/tmp/serialdemo/ttyUSB0`, then shortened by the Baud grow), **Baud** (1.5× the old 8-char width), **Settings**, **Open** at the right. Port shrinks by the same pixel amount Baud grows, so the row width and Open stay put.
 - 16px between those groups
 - **Port** / **Baud** / **Device**: editable (Port, Baud) or readonly (Device) combobox with the same single 1px outline as Settings. No `* All *` or `* Manual Entry *` item. Baud lists the selected port's `serial_ports.json` chip `baud_rates` (or `STANDARD_BAUD_RATES` clipped to that chip's `min_baud`..`max_baud` if `baud_rates` is missing) as full integers with comma thousands separators (`9,600`, `115,200`, `1,000,000`). Typed values strip commas (old `115.2K` still parses). An unknown port (no VID/PID match) uses the standard baud list (no 600). Selecting a device does not shrink this list. The user may still type a rate. Do not add a divider. The Baud box is sized so `1,000,000` fits.
 - **Port** shows `No Ports Available` until a port exists, then defaults to the first **Available** port
@@ -65,7 +65,8 @@ Version: 3.16 — In Use `xN` count; DTR idle-high + TEMP Reset (DTR) pulse (Nov
   - `Open` when the port is free
   - `Close` when this app has it open (click closes it)
   - Grayed `In Use` when another program holds the port
-- TEMP **Reset (DTR)** (`TEMP_DTR_RESET_BUTTON` in `serial_port_app.py`): disabled when no port is selected. Clicking drives DTR LOW for 100 ms then HIGH again without freezing the UI (`root.after`). pyserial polarity: `ser.dtr = True` asserts DTR (adapter TTL pin LOW / MB607 reset); `ser.dtr = False` is HIGH (idle). Uses the already-open handle if this app has the port Open; otherwise opens with the idle-DTR helper, pulses, and closes. Logs `COM8 - DTR reset pulse 100 ms` or a clear failure (e.g. port in use). Every app open (manual Open, scan/identify, availability probe) goes through `open_serial_idle_dtr`: construct closed, `dtr=False`, `open()`, `dtr=False` again. RTS is not changed. Some drivers/OSes still pulse DTR on open; the line is undriven while no port is open.
+- Every app open (manual Open, scan/identify, availability probe) goes through `open_serial_idle_dtr`: construct closed, `dtr=False`, `open()`, `dtr=False` again so DTR idles HIGH. pyserial polarity: `ser.dtr = True` / `ser.rts = True` drives the adapter TTL pin LOW; False is HIGH. RTS is not changed on open. Some drivers/OSes still pulse DTR on open; the line is undriven while no port is open.
+- **Identify** / Scan Devices: if that device’s `commands.reset` is present, the worker thread (same as today’s pause_ms sleeps — the Tk main loop is not blocked extra) pulses the configured line, waits for `wait_for`, sends initialize (and waits for `expect` when set), then runs the existing identify command + regex. Logs e.g. `COM8 - DTR reset pulse 100 ms`, `COM8 - Received: Press CR key...`, `COM8 - Sent: CR CR`, `COM8 - Received: Enter command`. A wait timeout is an identify failure for that baud. Devices without `reset` are unchanged.
 
 ### White box 2
 - One row: **Device** combo stretching across, **Identify** at the right
@@ -83,7 +84,6 @@ Version: 3.16 — In Use `xN` count; DTR idle-high + TEMP Reset (DTR) pulse (Nov
 |---|---|---|
 | Port, Baud, Settings | Disabled | Disabled |
 | Open | Disabled | Shows `Close` |
-| TEMP Reset (DTR) | Disabled | Enabled (also enabled whenever a port is selected) |
 | Device, Identify, Select | Disabled | Enabled |
 
 When the list is empty, only the header buttons and Exit stay enabled.

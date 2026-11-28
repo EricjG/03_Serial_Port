@@ -12,6 +12,9 @@ from device_data import (
     baud_rates_for_picker,
     command_steps,
     connected_device_label,
+    initialize_expect,
+    reset_command,
+    ttl_level_to_pyserial,
     controllers_field_text,
     default_baud,
     device_identity_fields,
@@ -443,6 +446,29 @@ class DeviceColumnTests(unittest.TestCase):
         )
         hmp = next(d for d in payload["devices"] if d["model"] == "HMP4040")
         self.assertEqual(command_steps(hmp), [("*idn?\r", 1.0)])
+
+    def test_mb607_reset_and_expect_load_others_default_absent(self):
+        payload, _error = _loaded()
+        mb607 = next(d for d in payload["devices"] if d["model"] == "MB607")
+        reset = reset_command(mb607)
+        self.assertEqual(reset["line"], "DTR")
+        self.assertEqual(reset["run_state"], "High")
+        self.assertEqual(reset["reset_state"], "Low")
+        self.assertEqual(reset["pulse_ms"], 100)
+        self.assertEqual(reset["wait_for"], "Press CR key for comand Debug Mode")
+        self.assertEqual(reset["timeout_ms"], 3000)
+        self.assertEqual(initialize_expect(mb607), ("Enter command", 3000))
+        sim = next(d for d in payload["devices"] if d["model"] == "SIM7080")
+        self.assertIsNone(reset_command(sim))
+        self.assertEqual(initialize_expect(sim), (None, 0))
+        self.assertEqual(
+            command_steps(mb607, keys=("identify",)),
+            [("I\r", 1.0)],
+        )
+
+    def test_ttl_level_to_pyserial_high_low(self):
+        self.assertFalse(ttl_level_to_pyserial("High"))
+        self.assertTrue(ttl_level_to_pyserial("Low"))
 
 
 class SerialPortsFileTests(unittest.TestCase):
